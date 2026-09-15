@@ -1,0 +1,27 @@
+# Build output
+build/
+build-*/
+cmake-build-*/
+*.o
+*.so
+*.a
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+
+# Simulation output
+*.ndjson
+runs/
+!tests/golden/*.ndjson
+
+# Editor / OS
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+.DS_Store
