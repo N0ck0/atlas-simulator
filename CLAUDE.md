@@ -17,12 +17,12 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
 
 <!-- UPDATE THIS AT THE END OF EVERY SESSION -->
 
-- **Stage:** S0 complete (toolchain, git, remote). S1 not started.
-- **On disk:** `README.md`, `.gitignore`, `CLAUDE.md`. No source code yet.
+- **Stage:** S1 in progress. Step 1.1 (time, event types, `EventQueue`) done and
+  passing its self-check. Next: 1.2 cluster model, 1.3 workload generation,
+  1.4 simulator loop, 1.5 metrics.
+- **On disk:** `README.md`, `.gitignore`, `CLAUDE.md`, `src/atlas.cpp`.
 - **Toolchain:** g++ 13.3, cmake 3.28.3, ninja 1.11.1, ccache 4.9.1, clang-format 18.1.3,
   Python 3.12. WSL2 / Ubuntu 24.04.
-- **Next:** S1 vertical slice — event queue, simulated clock, nodes, jobs, first-fit
-  placement, metrics. One translation unit, built with a bare `g++` call. CMake lands in S2.
 
 ## Architecture decisions (settled)
 
@@ -64,24 +64,20 @@ invalidates every experimental result the project produces.
 
 ### Comments
 
-- **Every declaration in a header gets a comment** covering what it does, plus any
-  precondition, ownership, or lifetime requirement. Preconditions matter most here —
-  "caller must have already verified capacity" is exactly the kind of unwritten
-  assumption that becomes a bug.
-- **Definitions get comments only where the *how* is non-obvious**: a non-local ordering
-  requirement, an algorithm choice with a rejected alternative, a deliberate workaround.
-- **Don't comment trivial accessors.** `// returns the size` above `size()` is noise, and
-  it trains readers to skip comments — including the one that mattered.
-- Prefer explaining *why* over *what*. The code already says what.
+- Keep them short: a few lines at most, plain prose. No ASCII rules, banners, or
+  section dividers.
+- Comment only where it earns its place: a design choice and the alternative it
+  beat, a non-obvious purpose, or a precondition the caller must satisfy.
+- Do not restate the code. No comments on trivial accessors or self-evident names.
+- Prefer why over what.
 
 ## Commands
 
-Nothing to build yet.
-
 ```bash
-# From S1 (single translation unit):
-g++ -std=c++20 -Wall -Wextra -Wpedantic -O2 -o atlas src/atlas.cpp && ./atlas --seed 42
+make          # build ./atlas
+make run      # build, then run the current step's self-check
+make clean
 
-# From S2 (CMake):
+# From S2, once CMake replaces the Makefile:
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 ```
