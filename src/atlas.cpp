@@ -1,7 +1,7 @@
 // Atlas: discrete-event simulator for cluster scheduling policies.
 //
 // Stage 1 lives in one translation unit; CMake and real headers arrive in S2.
-// Step 1.1: simulated time, event types, and the event queue.
+// Steps 1.1-1.2: simulated time, events, the event queue, cluster model.
 //
 // Build:
 //   g++ -std=c++20 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2
@@ -14,6 +14,9 @@
 #include <variant>
 #include <vector>
 #include <cassert>
+#include <utility>
+#include <limits>
+#include <optional>
 
 // Simulated time in microseconds. Integer rather than floating point so that
 // arithmetic stays exact and results are identical across optimization levels.
@@ -79,7 +82,6 @@ public:
 
     // top() and pop() are separate in the standard library, so the event has
     // to be copied out before the heap is popped.
-    //Caller responsible for ensuring queue isn't empty
     Event pop() {
         assert(!empty());
         Event top = heap_.top();
@@ -96,18 +98,149 @@ private:
     std::uint64_t next_seq_ = 0;
 };
 
-// Stands in for real unit tests
-int main() {
+// A bundle of resource dimensions, used for both node capacity and job
+// requests. Grouping them keeps adding a dimension (storage in S5) to a single
+// edit here rather than a change at every signature and call site.
+struct Resources {
+    std::uint32_t cores = 0;
+    std::uint64_t memory_mb = 0;
+
+    // C++20 defaulted comparison: generates member-wise == and !=.
+    bool operator==(const Resources&) const = default;
+};
+
+// A Tick that has not been set. Distinguishes "not started" from t=0.
+constexpr Tick kNever = std::numeric_limits<Tick>::max();
+
+// A machine. `capacity` is fixed at construction and `free` is the only
+// mutable resource field, so used == capacity - free is always derivable and
+// cannot drift out of sync.
+struct Node {
+    NodeId id{};
+    Resources capacity{};
+    Resources free{};
+    std::uint32_t running_jobs = 0;
+
+    // True when every dimension of `request` fits in what is currently free.
+    bool can_fit(const Resources& request) const {
+        return request.cores <= free.cores && request.memory_mb <= free.memory_mb;
+    }
+};
+
+enum class JobState : std::uint8_t { Queued, Running, Done };
+
+// A unit of work. `request` is the receipt for its resources: allocate and
+// release both read this one field, so they cannot disagree about how much was
+// taken.
+struct Job {
+    JobId id{};
+    Resources request{};
+    Tick duration = 0;  // service time once it starts running
+    Tick submit_time = 0;
+    Tick start_time = kNever;
+    Tick finish_time = kNever;
+    NodeId node{};  // meaningful only once state != Queued
+    JobState state = JobState::Queued;
+};
+
+// The machines and the resource accounting over them. Owns no jobs; the
+// simulator holds those and passes a Resources request in by value.
+class Cluster {
+public:
+    Cluster(std::uint32_t node_count, Resources per_node) {
+        nodes_.reserve(node_count);
+        for (std::uint32_t i = 0; i < node_count; ++i) {
+            nodes_.push_back(Node{NodeId{i}, per_node, per_node, 0});
+        }
+    }
+
+    // Lowest-index node that can fit `request`, or nullopt if none can.
+    // First-fit is the Stage 1 placeholder; S3 replaces it with a pluggable
+    // Scheduler interface.
+    std::optional<NodeId> first_fit(const Resources& request) const {
+        for (const Node& node : nodes_){
+            if (node.can_fit(request)) {
+                return node.id;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // Deducts `request` from the node's free pool and counts a running job.
+    // Precondition: node(id).can_fit(request).
+    void allocate(NodeId id, const Resources& request) {
+        Node& cur_node = mutable_node(id);
+        assert(cur_node.can_fit(request));
+
+
+        cur_node.free.cores -= request.cores;
+        cur_node.free.memory_mb -= request.memory_mb;
+        cur_node.running_jobs++;
+    }
+
+    // Returns `request` to the node's free pool. Must be passed the same
+    // Resources that were allocated, or free drifts away from capacity.
+    // Precondition: the node has at least one running job, and the release
+    // cannot push any dimension of free past capacity.
+    void release(NodeId id, const Resources& request) {
+        Node& cur_node = mutable_node(id);
+        assert(cur_node.running_jobs > 0);
+        assert(request.cores <= cur_node.capacity.cores - cur_node.free.cores);
+        assert(request.memory_mb <= cur_node.capacity.memory_mb - cur_node.free.memory_mb);
+
+        cur_node.free.cores += request.cores;
+        cur_node.free.memory_mb += request.memory_mb;
+        cur_node.running_jobs--;
+
+    }
+
+    const Node& node(NodeId id) const {
+        return nodes_[static_cast<std::uint32_t>(id)];
+    }
+
+    std::size_t size() const { return nodes_.size(); }
+
+    Resources total_capacity() const {
+        Resources sum;
+        for (const Node& n : nodes_) {
+            sum.cores += n.capacity.cores;
+            sum.memory_mb += n.capacity.memory_mb;
+        }
+        return sum;
+    }
+
+    // Summed free resources. Used below as a leak detector, and by the
+    // utilization metrics in S5.
+    Resources total_free() const {
+        Resources free_sum;
+        for (const Node& n : nodes_) {
+            free_sum.cores += n.free.cores;
+            free_sum.memory_mb += n.free.memory_mb;
+        }
+        return free_sum;
+    }
+
+private:
+    Node& mutable_node(NodeId id) {
+        return nodes_[static_cast<std::uint32_t>(id)];
+    }
+
+    std::vector<Node> nodes_;
+};
+
+// Stand in for real unit tests, which arrive with GoogleTest in S2.
+
+static bool check_event_queue() {
     EventQueue q;
 
     // Scheduled out of order, with a three-way tie at t=1s. Trailing comments
     // are the sequence number each call consumes.
-    q.schedule(500 * kMillisecond, JobArrival{JobId{1}});            // seq 0
-    q.schedule(2 * kSecond, JobFinish{JobId{1}, NodeId{0}});         // seq 1
-    q.schedule(1 * kSecond, JobArrival{JobId{2}});                   // seq 2
-    q.schedule(1 * kSecond, JobArrival{JobId{3}});                   // seq 3
-    q.schedule(1 * kSecond, JobArrival{JobId{4}});                   // seq 4
-    q.schedule(10 * kSecond, SimEnd{});                              // seq 5
+    q.schedule(500 * kMillisecond, JobArrival{JobId{1}});     // seq 0
+    q.schedule(2 * kSecond, JobFinish{JobId{1}, NodeId{0}});   // seq 1
+    q.schedule(1 * kSecond, JobArrival{JobId{2}});             // seq 2
+    q.schedule(1 * kSecond, JobArrival{JobId{3}});             // seq 3
+    q.schedule(1 * kSecond, JobArrival{JobId{4}});             // seq 4
+    q.schedule(10 * kSecond, SimEnd{});                        // seq 5
 
     // Time ordering pulls seq 1 behind the three events at t=1s, which the
     // tie-break then holds in scheduling order.
@@ -117,7 +250,7 @@ int main() {
     if (q.size() != kExpectedCount) {
         std::printf("FAIL  expected %zu events queued, found %zu\n",
                     kExpectedCount, q.size());
-        return 1;
+        return false;
     }
 
     bool ok = true;
@@ -126,7 +259,8 @@ int main() {
     for (std::size_t i = 0; i < kExpectedCount; ++i) {
         const Event e = q.pop();
 
-        std::printf("t=%8.3fs  seq=%llu  %-10s", static_cast<double>(e.time) / 1e6,
+        std::printf("  t=%8.3fs  seq=%llu  %-10s",
+                    static_cast<double>(e.time) / 1e6,
                     static_cast<unsigned long long>(e.seq),
                     kEventNames[e.payload.index()]);
 
@@ -144,11 +278,73 @@ int main() {
     }
 
     if (!q.empty()) {
-        std::printf("FAIL  queue should be empty, %zu remain\n", q.size());
+        std::printf("  FAIL  queue should be empty, %zu remain\n", q.size());
         ok = false;
     }
 
-    std::printf("\n%s\n", ok ? "PASS  events pop in (time, seq) order"
-                             : "FAIL  see markers above");
-    return ok ? 0 : 1;
+    std::printf("%s  event queue: (time, seq) ordering\n", ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+static bool check_cluster() {
+    bool ok = true;
+    auto expect = [&ok](bool cond, const char* what) {
+        if (!cond) {
+            std::printf("  FAIL  %s\n", what);
+            ok = false;
+        }
+    };
+
+    constexpr Resources kPerNode{8u, 16'384u};
+    Cluster c(4u, kPerNode);
+
+    expect(c.size() == 4u, "cluster has 4 nodes");
+    expect(c.total_capacity() == Resources{32u, 65'536u},
+           "total capacity is 4x per-node");
+    expect(c.total_free() == c.total_capacity(), "a fresh cluster is fully free");
+
+    // Dimensions are independent: a request can fail on memory alone.
+    const Node& n0 = c.node(NodeId{0});
+    expect(n0.can_fit(Resources{8u, 16'384u}), "an exact fit is accepted");
+    expect(!n0.can_fit(Resources{9u, 1'024u}), "too many cores is rejected");
+    expect(!n0.can_fit(Resources{1u, 20'000u}), "too much memory is rejected");
+
+    // first_fit takes the lowest index that fits, and moves along as nodes
+    // fill up.
+    constexpr Resources kWholeNode{8u, 16'384u};
+    for (std::uint32_t i = 0; i < 4u; ++i) {
+        const std::optional<NodeId> placed = c.first_fit(kWholeNode);
+        expect(placed.has_value(), "a free node was found");
+        if (!placed) {
+            std::printf("FAIL  cluster model\n");
+            return false;
+        }
+        expect(*placed == NodeId{i}, "first_fit returns the lowest free index");
+        c.allocate(*placed, kWholeNode);
+        expect(c.node(*placed).running_jobs == 1u,
+               "allocate counts a running job");
+    }
+
+    expect(!c.first_fit(Resources{1u, 1u}).has_value(),
+           "a full cluster places nothing");
+    expect(c.total_free() == Resources{}, "a full cluster has no free resources");
+
+    // The leak check. Releasing everything must restore the starting state
+    // exactly; any asymmetry between allocate and release surfaces here.
+    for (std::uint32_t i = 0; i < 4u; ++i) {
+        c.release(NodeId{i}, kWholeNode);
+    }
+    expect(c.total_free() == c.total_capacity(),
+           "release restores the cluster exactly");
+    expect(c.node(NodeId{0}).running_jobs == 0u, "release clears the job count");
+
+    std::printf("%s  cluster model: fit, placement, allocate/release\n",
+                ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+int main() {
+    const bool queue_ok = check_event_queue();
+    const bool cluster_ok = check_cluster();
+    return (queue_ok && cluster_ok) ? 0 : 1;
 }
