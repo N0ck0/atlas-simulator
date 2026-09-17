@@ -1,7 +1,7 @@
 // Atlas: discrete-event simulator for cluster scheduling policies.
 //
 // Stage 1 lives in one translation unit; CMake and real headers arrive in S2.
-// Steps 1.1-1.2: simulated time, events, the event queue, cluster model.
+// Steps 1.1-1.3a: time, events, the event queue, cluster, random source.
 //
 // Build:
 //   g++ -std=c++20 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2
@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <queue>
+#include <random>
+#include <cmath>
 #include <variant>
 #include <vector>
 #include <cassert>
@@ -230,6 +232,172 @@ private:
 
 // Stand in for real unit tests, which arrive with GoogleTest in S2.
 
+// Deterministic source of workload randomness.
+//
+// Uses the engine's raw output with hand-rolled transforms instead of
+// <random>'s distribution classes. The standard pins mt19937_64's output
+// sequence exactly, but leaves each distribution's mapping implementation
+// defined, so std::exponential_distribution yields different values on
+// libstdc++ and libc++ from the same seed. Hand-rolling keeps golden traces
+// portable across toolchains.
+class RandomSource {
+public:
+    explicit RandomSource(std::uint64_t seed) : rng_(seed) {}
+
+    // Uniform in (0, 1]. Zero is excluded so callers may take a logarithm.
+    double next_uniform() {
+        static constexpr double kPow53 = static_cast<double>(1ULL << 53);
+        std::uint64_t random = rng_();
+        random >>= 11;
+        random++;
+        return static_cast<double>(random)/kPow53;
+    }
+
+    // Time until the next event in a Poisson process of `rate_per_second`,
+    // quantized to whole microseconds. Returns 0 when the gap rounds below one
+    // microsecond; simultaneity is handled by the (time, seq) tie-break.
+    // Precondition: rate_per_second > 0.
+    Tick next_interarrival(double rate_per_second) {
+        assert(rate_per_second > 0.0);
+
+        // Inverse transform sampling: for U uniform on (0, 1], -ln(U)/rate is
+        // exponentially distributed with mean 1/rate. next_uniform() excludes
+        // zero, so the logarithm is always defined and the result never
+        // negative.
+        const double gap_seconds = -std::log(next_uniform()) / rate_per_second;
+        return static_cast<Tick>(gap_seconds * static_cast<double>(kSecond));
+    }
+
+    // Uniform integer in [0, n). Carries negligible modulo bias at the scales
+    // this is used for (choosing among a handful of job profiles).
+    // Precondition: n > 0.
+    std::uint64_t next_below(std::uint64_t n) {
+        assert(n > 0);
+        return rng_() % n;
+    }
+
+private:
+    std::mt19937_64 rng_;
+};
+
+static bool check_random_source() {
+    bool ok = true;
+    auto expect = [&ok](bool cond, const char* what) {
+        if (!cond) {
+            std::printf("  FAIL  %s\n", what);
+            ok = false;
+        }
+    };
+
+    constexpr std::uint64_t kSeed = 42;
+    constexpr std::size_t kSamples = 200'000;
+    constexpr double kRate = 10.0;  // jobs per second -> mean gap 100'000 us
+
+    // Determinism: the same seed must replay the same sequence exactly. This
+    // is the property every reproducible experiment rests on.
+    {
+        RandomSource a(kSeed);
+        RandomSource b(kSeed);
+        bool identical = true;
+        for (std::size_t i = 0; i < 1'000; ++i) {
+            if (a.next_uniform() != b.next_uniform()) identical = false;
+        }
+        expect(identical, "same seed replays an identical sequence");
+    }
+
+    // A different seed must actually diverge, or the seed is being ignored.
+    {
+        RandomSource a(kSeed);
+        RandomSource b(kSeed + 1);
+        bool any_difference = false;
+        for (std::size_t i = 0; i < 1'000; ++i) {
+            if (a.next_uniform() != b.next_uniform()) any_difference = true;
+        }
+        expect(any_difference, "a different seed produces a different sequence");
+    }
+
+    // Range: (0, 1]. Zero would break the logarithm in next_interarrival.
+    {
+        RandomSource r(kSeed);
+        bool in_range = true;
+        for (std::size_t i = 0; i < kSamples; ++i) {
+            const double u = r.next_uniform();
+            if (!(u > 0.0 && u <= 1.0)) in_range = false;
+        }
+        expect(in_range, "every uniform draw lies in (0, 1]");
+    }
+
+    // Statistical checks. Randomness is tested by distribution, not by exact
+    // value, so each comes with a tolerance derived from the sample count.
+    {
+        RandomSource r(kSeed);
+        double sum = 0.0;
+        double sum_sq = 0.0;
+        bool monotonic_ok = true;
+        for (std::size_t i = 0; i < kSamples; ++i) {
+            const double gap = static_cast<double>(r.next_interarrival(kRate));
+            if (gap < 0.0) monotonic_ok = false;
+            sum += gap;
+            sum_sq += gap * gap;
+        }
+        const double n = static_cast<double>(kSamples);
+        const double mean = sum / n;
+        const double variance = sum_sq / n - mean * mean;
+        const double stddev = std::sqrt(variance);
+        const double expected_mean = 1e6 / kRate;  // microseconds
+
+        expect(monotonic_ok, "no negative inter-arrival gaps");
+
+        // Relative standard error of the mean is 1/sqrt(N) ~ 0.22% here, so a
+        // 2% band is about 9 sigma: tight enough to catch a wrong rate, loose
+        // enough never to fail by chance.
+        const double mean_error = std::fabs(mean - expected_mean) / expected_mean;
+        expect(mean_error < 0.02, "mean inter-arrival gap matches 1/rate");
+
+        // The exponential distribution has stddev == mean, so its coefficient
+        // of variation is 1. A uniform distribution with the right mean would
+        // give ~0.577, so this check verifies the SHAPE, not just the average.
+        const double cv = stddev / mean;
+        expect(cv > 0.95 && cv < 1.05, "gap distribution is exponential (CV ~ 1)");
+
+        std::printf("    mean gap %.1f us (expected %.1f), CV %.3f (expected 1.0)\n",
+                    mean, expected_mean, cv);
+    }
+
+    // next_below: in range, degenerate case, and roughly even coverage.
+    {
+        RandomSource r(kSeed);
+        constexpr std::uint64_t kBuckets = 5;
+        constexpr std::size_t kDraws = 100'000;
+        std::vector<std::size_t> counts(kBuckets, 0);
+        bool in_range = true;
+        for (std::size_t i = 0; i < kDraws; ++i) {
+            const std::uint64_t v = r.next_below(kBuckets);
+            if (v >= kBuckets) {
+                in_range = false;
+            } else {
+                ++counts[v];
+            }
+        }
+        expect(in_range, "next_below stays under n");
+
+        // Expected 20'000 per bucket, sigma ~126, so a 10% band is ~16 sigma.
+        bool even = true;
+        for (std::size_t i = 0; i < kBuckets; ++i) {
+            const double share = static_cast<double>(counts[i]) / static_cast<double>(kDraws);
+            if (share < 0.18 || share > 0.22) even = false;
+        }
+        expect(even, "next_below covers each value roughly evenly");
+
+        RandomSource one(kSeed);
+        expect(one.next_below(1) == 0, "next_below(1) is always 0");
+    }
+
+    std::printf("%s  random source: determinism, range, distribution\n",
+                ok ? "PASS" : "FAIL");
+    return ok;
+}
+
 static bool check_event_queue() {
     EventQueue q;
 
@@ -346,5 +514,6 @@ static bool check_cluster() {
 int main() {
     const bool queue_ok = check_event_queue();
     const bool cluster_ok = check_cluster();
-    return (queue_ok && cluster_ok) ? 0 : 1;
+    const bool random_ok = check_random_source();
+    return (queue_ok && cluster_ok && random_ok) ? 0 : 1;
 }
