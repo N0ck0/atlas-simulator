@@ -1,7 +1,7 @@
 // Atlas: discrete-event simulator for cluster scheduling policies.
 //
 // Stage 1 lives in one translation unit; CMake and real headers arrive in S2.
-// Steps 1.1-1.3a: time, events, the event queue, cluster, random source.
+// Steps 1.1-1.3b: time, events, event queue, cluster, random source, workload.
 //
 // Build:
 //   g++ -std=c++20 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2
@@ -143,6 +143,8 @@ struct Job {
     Tick finish_time = kNever;
     NodeId node{};  // meaningful only once state != Queued
     JobState state = JobState::Queued;
+
+    bool operator==(const Job&) const = default;
 };
 
 // The machines and the resource accounting over them. Owns no jobs; the
@@ -253,19 +255,26 @@ public:
         return static_cast<double>(random)/kPow53;
     }
 
-    // Time until the next event in a Poisson process of `rate_per_second`,
-    // quantized to whole microseconds. Returns 0 when the gap rounds below one
-    // microsecond; simultaneity is handled by the (time, seq) tie-break.
+    // Exponentially distributed gap with the given mean, in Ticks. Returns 0
+    // when a draw rounds below one microsecond; simultaneity is handled by the
+    // (time, seq) tie-break.
+    // Precondition: mean_ticks > 0.
+    Tick next_exponential(double mean_ticks) {
+        assert(mean_ticks > 0.0);
+
+        // Inverse transform sampling: for U uniform on (0, 1], -ln(U) * mean
+        // is exponentially distributed with that mean. next_uniform() excludes
+        // zero, so the logarithm is always defined and the result is never
+        // negative.
+        const double gap_ticks = -std::log(next_uniform()) * mean_ticks;
+        return static_cast<Tick>(gap_ticks);
+    }
+
+    // Time until the next event in a Poisson process of `rate_per_second`.
     // Precondition: rate_per_second > 0.
     Tick next_interarrival(double rate_per_second) {
         assert(rate_per_second > 0.0);
-
-        // Inverse transform sampling: for U uniform on (0, 1], -ln(U)/rate is
-        // exponentially distributed with mean 1/rate. next_uniform() excludes
-        // zero, so the logarithm is always defined and the result never
-        // negative.
-        const double gap_seconds = -std::log(next_uniform()) / rate_per_second;
-        return static_cast<Tick>(gap_seconds * static_cast<double>(kSecond));
+        return next_exponential((1/rate_per_second)* static_cast<double>(kSecond));
     }
 
     // Uniform integer in [0, n). Carries negligible modulo bias at the scales
@@ -291,7 +300,7 @@ static bool check_random_source() {
 
     constexpr std::uint64_t kSeed = 42;
     constexpr std::size_t kSamples = 200'000;
-    constexpr double kRate = 10.0;  // jobs per second -> mean gap 100'000 us
+    constexpr double kRate = 0.025;  // jobs per second -> mean gap 100'000 us
 
     // Determinism: the same seed must replay the same sequence exactly. This
     // is the property every reproducible experiment rests on.
@@ -394,6 +403,214 @@ static bool check_random_source() {
     }
 
     std::printf("%s  random source: determinism, range, distribution\n",
+                ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+// A class of job. The workload draws from a mix of these so that placement is
+// a real decision rather than a formality.
+struct JobProfile {
+    const char* name;
+    Resources request;
+    Tick mean_duration;
+};
+
+// Picked uniformly. Weighting these is how a heavy tail gets added in S7.
+constexpr JobProfile kJobProfiles[] = {
+    {"small", {1u, 2'048u}, 30 * kSecond},
+    {"medium", {4u, 8'192u}, 120 * kSecond},
+    {"large", {16u, 32'768u}, 600 * kSecond},
+};
+
+// Offered load as a fraction of capacity, per dimension. At or above 1.0 the
+// cluster cannot keep up: the queue grows without bound and mean completion
+// time stops being a property of the scheduler.
+struct LoadFactor {
+    double cores = 0.0;
+    double memory = 0.0;
+};
+
+// Builds the whole workload before the clock starts, so the job sequence is a
+// function of the seed alone and not of any scheduling decision.
+class WorkloadGenerator {
+public:
+    WorkloadGenerator(std::uint64_t seed, double arrival_rate_per_second)
+        : rng_(seed), arrival_rate_(arrival_rate_per_second) {
+        assert(arrival_rate_per_second > 0.0);
+    }
+
+    // `count` jobs with dense ids 0..count-1 and non-decreasing submit_time.
+    std::vector<Job> generate(std::uint32_t count) {
+        std::vector<Job> jobs;
+        jobs.reserve(count);
+        Tick cur_tick{0};
+
+        for (std::uint32_t num = 0; num < count; num++){
+            const JobProfile& profile = kJobProfiles[rng_.next_below(std::size(kJobProfiles))];
+            const Tick duration = rng_.next_exponential(static_cast<double>(profile.mean_duration));
+            cur_tick += rng_.next_interarrival(arrival_rate_);
+            Job j{
+                .id = JobId{num},
+                .request = profile.request,
+                .duration = duration,
+                .submit_time = cur_tick
+            };
+            jobs.push_back(j);
+        }
+
+        return jobs;
+    }
+
+private:
+    RandomSource rng_;
+    double arrival_rate_;
+};
+
+// Resource-time demanded by `jobs` over the span they arrive in, divided by
+// what `cluster` can supply in that span.
+// Precondition: `jobs` is non-empty and ordered by submit_time.
+LoadFactor offered_load(const std::vector<Job>& jobs, const Cluster& cluster) {
+    assert(jobs.size() > 0);
+    Tick arrival_start = jobs[0].submit_time;
+    Tick arrival_end = jobs[jobs.size() - 1].submit_time;
+    Tick arrival_span = arrival_end - arrival_start;
+    Resources cap = cluster.total_capacity();
+    std::uint64_t free_cores = cap.cores;
+    std::uint64_t free_memory_mb = cap.memory_mb;
+    std::uint64_t core_seconds = free_cores * arrival_span;
+    std::uint64_t memory_seconds = free_memory_mb * arrival_span;
+
+    std::uint64_t job_cores_seconds = 0;
+    std::uint64_t job_memory_seconds = 0;
+    for (const Job& job : jobs){
+        job_cores_seconds += job.duration * job.request.cores;
+        job_memory_seconds += job.duration * job.request.memory_mb;
+    }
+    double core_load = static_cast<double>(job_cores_seconds) / 
+                        static_cast<double>(core_seconds);
+    double memory_load = static_cast<double>(job_memory_seconds) / 
+                        static_cast<double>(memory_seconds);
+
+    return {core_load, memory_load};
+}
+
+static bool check_workload() {
+    bool ok = true;
+    auto expect = [&ok](bool cond, const char* what) {
+        if (!cond) {
+            std::printf("  FAIL  %s\n", what);
+            ok = false;
+        }
+    };
+
+    constexpr std::uint64_t kSeed = 7;
+    constexpr std::uint32_t kCount = 20'000;
+    constexpr double kRate = 0.025;  // jobs per second
+
+    // Determinism: the workload must be a pure function of the seed.
+    {
+        WorkloadGenerator g1(kSeed, kRate);
+        WorkloadGenerator g2(kSeed, kRate);
+        expect(g1.generate(kCount) == g2.generate(kCount),
+               "same seed produces an identical workload");
+
+        WorkloadGenerator g3(kSeed + 1, kRate);
+        WorkloadGenerator g4(kSeed, kRate);
+        expect(!(g3.generate(kCount) == g4.generate(kCount)),
+               "a different seed produces a different workload");
+    }
+
+    WorkloadGenerator gen(kSeed, kRate);
+    const std::vector<Job> jobs = gen.generate(kCount);
+
+    expect(jobs.size() == kCount, "generate returns the requested count");
+    if (jobs.size() != kCount) {
+        std::printf("FAIL  workload generator\n");
+        return false;
+    }
+
+    // Structural invariants every generated job must satisfy.
+    {
+        bool ids_dense = true;
+        bool times_sorted = true;
+        bool fresh = true;
+        bool has_duration = true;
+        for (std::size_t i = 0; i < jobs.size(); ++i) {
+            const Job& j = jobs[i];
+            if (static_cast<std::size_t>(static_cast<std::uint32_t>(j.id)) != i) {
+                ids_dense = false;
+            }
+            if (i > 0 && j.submit_time < jobs[i - 1].submit_time) {
+                times_sorted = false;
+            }
+            if (j.state != JobState::Queued || j.start_time != kNever ||
+                j.finish_time != kNever) {
+                fresh = false;
+            }
+            if (j.duration == 0 || j.request.cores == 0) {
+                has_duration = false;
+            }
+        }
+        expect(ids_dense, "ids are dense and in order");
+        expect(times_sorted, "submit times are non-decreasing");
+        expect(fresh, "every job starts Queued with unset timestamps");
+        expect(has_duration, "every job has a non-zero duration and request");
+    }
+
+    // Arrival rate calibration, read back off the submit times.
+    {
+        const double span = static_cast<double>(jobs.back().submit_time -
+                                                jobs.front().submit_time);
+        const double mean_gap = span / static_cast<double>(jobs.size() - 1);
+        const double expected_gap = static_cast<double>(kSecond) / kRate;
+        expect(std::fabs(mean_gap - expected_gap) / expected_gap < 0.05,
+               "mean arrival gap matches the configured rate");
+        std::printf("    mean arrival gap %.0f us (expected %.0f)\n", mean_gap,
+                    expected_gap);
+    }
+
+    // Every profile should show up across 20k uniform draws.
+    {
+        constexpr std::size_t kProfileCount =
+            sizeof(kJobProfiles) / sizeof(kJobProfiles[0]);
+        std::vector<std::size_t> seen(kProfileCount, 0);
+        for (const Job& j : jobs) {
+            for (std::size_t p = 0; p < kProfileCount; ++p) {
+                if (j.request == kJobProfiles[p].request) ++seen[p];
+            }
+        }
+        bool all_present = true;
+        for (std::size_t c : seen) {
+            if (c == 0) all_present = false;
+        }
+        expect(all_present, "every job profile appears in the workload");
+    }
+
+    // Load factor. Checked by its scaling properties rather than by
+    // recomputing the formula, which would just restate the implementation.
+    {
+        Cluster small(8u, Resources{16u, 65'536u});
+        const LoadFactor lf = offered_load(jobs, small);
+        std::printf("    rho: cores %.3f  memory %.3f\n", lf.cores, lf.memory);
+        expect(lf.cores > 0.0 && lf.memory > 0.0, "load factor is positive");
+        expect(lf.cores < 1000.0, "Rho within plausible range");
+
+        // Doubling capacity must halve rho.
+        Cluster big(16u, Resources{16u, 65'536u});
+        const LoadFactor lf_big = offered_load(jobs, big);
+        expect(std::fabs(lf_big.cores - lf.cores / 2.0) < 0.01 * lf.cores,
+               "rho halves when cluster capacity doubles");
+
+        // Doubling the arrival rate must roughly double rho: the same jobs
+        // arrive over half the span.
+        WorkloadGenerator fast(kSeed, kRate * 2.0);
+        const LoadFactor lf_fast = offered_load(fast.generate(kCount), small);
+        const double ratio = lf_fast.cores / lf.cores;
+        expect(ratio > 1.8 && ratio < 2.2, "rho scales with arrival rate");
+        std::printf("    rho doubles with rate: ratio %.3f\n", ratio);
+    }
+
+    std::printf("%s  workload: determinism, structure, rate, load factor\n",
                 ok ? "PASS" : "FAIL");
     return ok;
 }
@@ -515,5 +732,6 @@ int main() {
     const bool queue_ok = check_event_queue();
     const bool cluster_ok = check_cluster();
     const bool random_ok = check_random_source();
-    return (queue_ok && cluster_ok && random_ok) ? 0 : 1;
+    const bool workload_ok = check_workload();
+    return (queue_ok && cluster_ok && random_ok && workload_ok) ? 0 : 1;
 }
