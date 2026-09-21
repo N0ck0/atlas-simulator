@@ -17,12 +17,46 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
 
 <!-- UPDATE THIS AT THE END OF EVERY SESSION -->
 
-- **Stage:** S1 in progress. Step 1.1 (time, event types, `EventQueue`) done and
-  passing its self-check. Next: 1.2 cluster model, 1.3 workload generation,
-  1.4 simulator loop, 1.5 metrics.
-- **On disk:** `README.md`, `.gitignore`, `CLAUDE.md`, `src/atlas.cpp`.
+- **Stage:** S1 (vertical slice). Steps 1.1-1.3 complete, committed, working tree clean.
+- **What exists:** everything is in `src/atlas.cpp` (~740 lines, one translation unit) --
+  `Tick` and strong `JobId`/`NodeId`; variant event payloads and `EventQueue`;
+  `Resources`/`Node`/`Job`/`Cluster` with first-fit placement; `RandomSource`;
+  `WorkloadGenerator` and `offered_load`. Built with `make` (`make run` to build and
+  run). CMake replaces the Makefile in S2.
+- **Nothing is wired together yet.** There is no simulation loop: a clock with no
+  simulation, a cluster nothing runs on, a workload nobody schedules. That is 1.4.
+- **Self-checks:** four `check_*()` functions called from `main`, which exits non-zero on
+  failure. They stand in for real tests until GoogleTest arrives in S2. Each new step
+  adds one; earlier ones stay as regression guards.
+- **Operating point:** workload constants are deliberately tuned so that offered load is
+  about rho 0.67 on cores and 0.34 on memory. At rho >= 1 the queue grows without bound
+  and every downstream metric becomes meaningless, so re-check `offered_load` after
+  changing the arrival rate, the profile table, or the cluster size.
 - **Toolchain:** g++ 13.3, cmake 3.28.3, ninja 1.11.1, ccache 4.9.1, clang-format 18.1.3,
   Python 3.12. WSL2 / Ubuntu 24.04.
+
+### Next: step 1.4, the simulator loop
+
+Connects the existing pieces. The design is already settled:
+
+- `Simulator` owns `std::vector<Job> jobs_` (indexed by `JobId`, so `jobs_[5]` is
+  `JobId{5}`) and `std::deque<JobId> pending_`. `Cluster` continues to own only nodes
+  and never sees a `Job`.
+- Seed the queue with one `JobArrival` per job plus a `SimEnd`, then pop until empty:
+  advance the clock, assert it never moves backwards, `std::visit` to dispatch.
+- `JobArrival` -> push the id onto `pending_` -> `drain()`.
+- `drain()` -> first-fit, allocate, set `start_time`, mark Running, schedule `JobFinish`
+  at `now + duration`.
+- `JobFinish` -> assert the job is Running, assert the event's `NodeId` matches
+  `job.node`, release, set `finish_time`, mark Done -> `drain()`.
+- **Exactly one function performs placement.** Arrival and completion each end by calling
+  it once, and nothing else touches `Cluster::allocate`. A second placement call site is
+  how jobs get double-allocated.
+
+Then 1.5: time-weighted utilization integrals, completion-time percentiles via
+`nth_element`, a JSONL trace with the seed stamped in, CLI arguments, and the acceptance
+checks (identical output hash across -O0 and -O2; more nodes lowers queue time; pushing
+rho toward 1 makes queueing explode).
 
 ## Architecture decisions (settled)
 
