@@ -17,15 +17,21 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
 
 <!-- UPDATE THIS AT THE END OF EVERY SESSION -->
 
-- **Stage:** S1 (vertical slice). Steps 1.1-1.3 complete, committed, working tree clean.
-- **What exists:** everything is in `src/atlas.cpp` (~740 lines, one translation unit) --
+- **Stage:** S1 (vertical slice). Steps 1.1-1.4 complete.
+- **What exists:** everything is in `src/atlas.cpp` (~980 lines, one translation unit) --
   `Tick` and strong `JobId`/`NodeId`; variant event payloads and `EventQueue`;
   `Resources`/`Node`/`Job`/`Cluster` with first-fit placement; `RandomSource`;
-  `WorkloadGenerator` and `offered_load`. Built with `make` (`make run` to build and
-  run). CMake replaces the Makefile in S2.
-- **Nothing is wired together yet.** There is no simulation loop: a clock with no
-  simulation, a cluster nothing runs on, a workload nobody schedules. That is 1.4.
-- **Self-checks:** four `check_*()` functions called from `main`, which exits non-zero on
+  `WorkloadGenerator` and `offered_load`; and `Simulator`, which runs them. Built with
+  `make` (`make run` to build and run). CMake replaces the Makefile in S2.
+- **The loop runs end to end.** `Simulator` seeds one `JobArrival` per job, pops until
+  the queue is empty, and every job reaches Done with resources returned. Output is
+  byte-identical across `-O0` and `-O2`.
+- **Placement is strict FIFO and there are no metrics yet.** `drain()` stops at the
+  head of `pending_` when it does not fit, so a large job blocks smaller ones behind
+  it; backfill and pluggable schedulers are S3. `SimEnd` is defined and dispatched but
+  never scheduled -- it gets a real time in 1.5, when it bounds the utilization
+  integral.
+- **Self-checks:** five `check_*()` functions called from `main`, which exits non-zero on
   failure. They stand in for real tests until GoogleTest arrives in S2. Each new step
   adds one; earlier ones stay as regression guards.
 - **Operating point:** workload constants are deliberately tuned so that offered load is
@@ -35,28 +41,18 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
 - **Toolchain:** g++ 13.3, cmake 3.28.3, ninja 1.11.1, ccache 4.9.1, clang-format 18.1.3,
   Python 3.12. WSL2 / Ubuntu 24.04.
 
-### Next: step 1.4, the simulator loop
+### Next: step 1.5, metrics and the trace
 
-Connects the existing pieces. The design is already settled:
+The last step of the vertical slice. Turns a run that works into a run that reports:
 
-- `Simulator` owns `std::vector<Job> jobs_` (indexed by `JobId`, so `jobs_[5]` is
-  `JobId{5}`) and `std::deque<JobId> pending_`. `Cluster` continues to own only nodes
-  and never sees a `Job`.
-- Seed the queue with one `JobArrival` per job plus a `SimEnd`, then pop until empty:
-  advance the clock, assert it never moves backwards, `std::visit` to dispatch.
-- `JobArrival` -> push the id onto `pending_` -> `drain()`.
-- `drain()` -> first-fit, allocate, set `start_time`, mark Running, schedule `JobFinish`
-  at `now + duration`.
-- `JobFinish` -> assert the job is Running, assert the event's `NodeId` matches
-  `job.node`, release, set `finish_time`, mark Done -> `drain()`.
-- **Exactly one function performs placement.** Arrival and completion each end by calling
-  it once, and nothing else touches `Cluster::allocate`. A second placement call site is
-  how jobs get double-allocated.
-
-Then 1.5: time-weighted utilization integrals, completion-time percentiles via
-`nth_element`, a JSONL trace with the seed stamped in, CLI arguments, and the acceptance
-checks (identical output hash across -O0 and -O2; more nodes lowers queue time; pushing
-rho toward 1 makes queueing explode).
+- Time-weighted utilization integrals, accumulated at every event rather than sampled.
+- Completion-time percentiles via `nth_element`.
+- A JSONL trace with the seed stamped in, and CLI arguments for seed, node count, job
+  count, and arrival rate.
+- Give `SimEnd` a real time at or after the last finish, so the integrals have a
+  definite upper limit.
+- Acceptance checks: identical output hash across `-O0` and `-O2` (already holds); more
+  nodes lowers mean queue time; pushing rho toward 1 makes queueing explode.
 
 ## Architecture decisions (settled)
 

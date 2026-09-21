@@ -1,7 +1,8 @@
 // Atlas: discrete-event simulator for cluster scheduling policies.
 //
 // Stage 1 lives in one translation unit; CMake and real headers arrive in S2.
-// Steps 1.1-1.3b: time, events, event queue, cluster, random source, workload.
+// Steps 1.1-1.4: time, events, event queue, cluster, random source, workload,
+// and the simulator loop that drives them.
 //
 // Build:
 //   g++ -std=c++20 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2
@@ -10,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <queue>
 #include <random>
 #include <cmath>
@@ -19,6 +21,7 @@
 #include <utility>
 #include <limits>
 #include <optional>
+#include <type_traits>
 
 // Simulated time in microseconds. Integer rather than floating point so that
 // arithmetic stays exact and results are identical across optimization levels.
@@ -51,6 +54,8 @@ struct SimEnd {};
 // so visitors can be checked for exhaustiveness at compile time, and value
 // semantics keep events inline in the queue's vector with no heap allocation.
 using EventPayload = std::variant<JobArrival, JobFinish, SimEnd>;
+template <typename...>
+constexpr bool kAlwaysFalse = false;
 
 // Indexed by EventPayload::index(). Keep in sync with the variant above.
 constexpr const char* kEventNames[] = {"JobArrival", "JobFinish", "SimEnd"};
@@ -615,6 +620,242 @@ static bool check_workload() {
     return ok;
 }
 
+// Drives the clock. Owns the jobs and the backlog; Cluster still never sees a
+// Job, only a Resources request.
+//
+// pending_ holds ids rather than pointers because jobs_ is a vector: a Job*
+// parked in the backlog would dangle the moment it reallocated.
+class Simulator {
+public:
+    // `jobs` must have dense ids matching its indices, as WorkloadGenerator
+    // produces: jobs_[5] is JobId{5}.
+    Simulator(Cluster cluster, std::vector<Job> jobs);
+
+    // Seeds the queue and runs it to exhaustion. Call once.
+    void run();
+
+    Tick now() const { return now_; }
+    const std::vector<Job>& jobs() const { return jobs_; }
+    const Cluster& cluster() const { return cluster_; }
+    std::size_t pending_count() const { return pending_.size(); }
+
+private:
+    // The one and only placement site. Nothing else calls Cluster::allocate.
+    void drain();
+
+    void on_arrival(const JobArrival& arrival);
+    void on_finish(const JobFinish& finish);
+
+    Job& job(JobId id) { return jobs_[static_cast<std::uint32_t>(id)]; }
+
+    Cluster cluster_;
+    std::vector<Job> jobs_;
+    std::deque<JobId> pending_;
+    EventQueue queue_;
+    Tick now_ = 0;
+};
+
+Simulator::Simulator(Cluster cluster, std::vector<Job> jobs)
+    : cluster_(std::move(cluster)), jobs_(std::move(jobs)) {}
+
+void Simulator::run() {
+    for (const Job& j : jobs_){
+        queue_.schedule(j.submit_time, JobArrival{j.id});
+    }
+    //queue_.schedule(LARGE_TIME, SimEnd{});
+
+    while (!queue_.empty()){
+        Event e = queue_.pop();
+        assert(e.time >= now_);
+        now_ = e.time;
+
+        std::visit([this](auto& payload){
+
+            using T = std::decay_t<decltype(payload)>;
+
+            if constexpr(std::is_same_v<T, JobArrival>){
+                this->on_arrival(payload);
+            }
+            else if constexpr (std::is_same_v<T, JobFinish>){
+                this->on_finish(payload);
+            }
+            else if constexpr (std::is_same_v<T, SimEnd>){
+                //placeholder for now
+            }
+            else{
+                static_assert(kAlwaysFalse<T>, "Unhandled Event Type in Visitor");
+            }
+            }, e.payload);
+    }
+
+
+}
+
+void Simulator::drain() {
+    while (!pending_.empty()){
+        JobId next_job_id = pending_.front();
+        Job& next_job = job(next_job_id);
+        auto res = cluster_.first_fit(next_job.request);
+        if (!res.has_value()) break;
+
+        //Job at front of pending queue can be assigned
+        cluster_.allocate(res.value(), next_job.request);
+        next_job.state = JobState::Running;
+        next_job.start_time = now_;
+        next_job.node = res.value();
+        pending_.pop_front();
+        queue_.schedule(now_ + next_job.duration, JobFinish{next_job.id, next_job.node});
+    }
+}
+
+void Simulator::on_arrival(const JobArrival& arrival) {
+    pending_.push_back(arrival.job);
+    drain();
+}
+
+void Simulator::on_finish(const JobFinish& finish) {
+    Job& this_job = job(finish.job);
+    assert(this_job.state == JobState::Running);
+    assert(this_job.node == finish.node);
+    cluster_.release(this_job.node, this_job.request);
+    this_job.finish_time = now_;
+    this_job.state = JobState::Done;
+    drain();
+}
+
+static bool check_simulator() {
+    bool ok = true;
+    auto expect = [&ok](bool cond, const char* what) {
+        if (!cond) {
+            std::printf("  FAIL  %s\n", what);
+            ok = false;
+        }
+    };
+
+    constexpr std::uint64_t kSeed = 7;
+    constexpr std::uint32_t kCount = 2'000;
+    constexpr double kRate = 0.025;
+    constexpr Resources kPerNode{16u, 65'536u};
+
+    WorkloadGenerator gen(kSeed, kRate);
+    const std::vector<Job> workload = gen.generate(kCount);
+
+    Simulator sim(Cluster(8u, kPerNode), workload);
+    sim.run();
+
+    const std::vector<Job>& done = sim.jobs();
+
+    expect(done.size() == kCount, "the simulator keeps every job");
+    if (done.size() != kCount) {
+        std::printf("FAIL  simulator loop\n");
+        return false;
+    }
+
+    // Every job must reach Done with a consistent, causal set of timestamps.
+    {
+        bool all_done = true;
+        bool durations_honoured = true;
+        bool causal = true;
+        bool request_preserved = true;
+        for (std::size_t i = 0; i < done.size(); ++i) {
+            const Job& j = done[i];
+            const Job& original = workload[i];
+            if (j.state != JobState::Done) all_done = false;
+            if (j.start_time == kNever || j.finish_time == kNever) {
+                causal = false;
+                continue;
+            }
+            if (j.finish_time - j.start_time != j.duration) {
+                durations_honoured = false;
+            }
+            if (j.start_time < j.submit_time) causal = false;
+            if (j.request != original.request || j.duration != original.duration ||
+                j.submit_time != original.submit_time) {
+                request_preserved = false;
+            }
+        }
+        expect(all_done, "every job ends in the Done state");
+        expect(causal, "no job starts before it was submitted");
+        expect(durations_honoured, "each job runs for exactly its duration");
+        expect(request_preserved, "the simulator does not rewrite the workload");
+    }
+
+    expect(sim.pending_count() == 0, "nothing is left queued at the end");
+
+    // The leak check, same idea as the cluster one: if allocate and release
+    // ever disagree, or a job is placed twice, free no longer returns to
+    // capacity.
+    expect(sim.cluster().total_free() == sim.cluster().total_capacity(),
+           "the cluster is fully free once the run ends");
+
+    // The clock must end no earlier than the last completion.
+    {
+        Tick last_finish = 0;
+        for (const Job& j : done) {
+            if (j.finish_time != kNever && j.finish_time > last_finish) {
+                last_finish = j.finish_time;
+            }
+        }
+        expect(sim.now() >= last_finish, "the clock ends at or after the last finish");
+    }
+
+    // Determinism, the headline property: the same seed and cluster must
+    // replay an identical history.
+    {
+        Simulator again(Cluster(8u, kPerNode), workload);
+        again.run();
+        expect(again.jobs() == done, "the same seed replays an identical history");
+    }
+
+    // A cluster large enough to hold the whole workload at once should queue
+    // nothing: every job starts the moment it arrives. This separates "the
+    // loop works" from "the loop happens to be backlogged".
+    {
+        Simulator roomy(Cluster(kCount, kPerNode), workload);
+        roomy.run();
+        bool no_queueing = true;
+        for (const Job& j : roomy.jobs()) {
+            if (j.start_time != j.submit_time) no_queueing = false;
+        }
+        expect(no_queueing, "an oversized cluster starts every job on arrival");
+    }
+
+    // A cluster too small for any job must not place one, and must not hang.
+    {
+        Simulator tiny(Cluster(1u, Resources{1u, 1'024u}), workload);
+        tiny.run();
+        bool none_started = true;
+        for (const Job& j : tiny.jobs()) {
+            if (j.start_time != kNever) none_started = false;
+        }
+        expect(none_started, "a cluster that fits nothing places nothing");
+        expect(tiny.pending_count() == kCount, "unplaceable jobs stay pending");
+    }
+
+    // Queueing must show up under load, otherwise the backlog path is dead
+    // code and every check above passes vacuously.
+    {
+        Tick queued_time = 0;
+        std::size_t started = 0;
+        for (const Job& j : done) {
+            if (j.start_time == kNever) continue;
+            queued_time += j.start_time - j.submit_time;
+            ++started;
+        }
+        expect(queued_time > 0, "some job waits at rho 0.67");
+        if (started > 0) {
+            std::printf("    mean queue time %.3fs over %zu started jobs\n",
+                        static_cast<double>(queued_time) /
+                            static_cast<double>(started) / 1e6,
+                        started);
+        }
+    }
+
+    std::printf("%s  simulator loop: completion, conservation, determinism\n",
+                ok ? "PASS" : "FAIL");
+    return ok;
+}
+
 static bool check_event_queue() {
     EventQueue q;
 
@@ -733,5 +974,6 @@ int main() {
     const bool cluster_ok = check_cluster();
     const bool random_ok = check_random_source();
     const bool workload_ok = check_workload();
-    return (queue_ok && cluster_ok && random_ok && workload_ok) ? 0 : 1;
+    const bool simulator_ok = check_simulator();
+    return (queue_ok && cluster_ok && random_ok && workload_ok && simulator_ok) ? 0 : 1;
 }
