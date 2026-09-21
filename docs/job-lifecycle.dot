@@ -1,0 +1,35 @@
+// The states one job passes through. Note that JobState::Queued covers two
+// distinct situations, which is why pending_.size() is not a count of Queued.
+//
+// Render:  dot -Tsvg docs/job-lifecycle.dot -o docs/job-lifecycle.svg
+
+digraph lifecycle {
+  rankdir=LR;
+  bgcolor="white";
+  nodesep=0.4;
+  ranksep=0.9;
+  fontname="Helvetica";
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled",
+        fillcolor="#ffffff", color="#555555", margin="0.16,0.10"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.75];
+
+  label="A single job's lifecycle — state, and what it is waiting on";
+  labelloc="t";
+  fontsize=12;
+  fontcolor="#333333";
+
+  q  [label="Queued\lin jobs_, not yet arrived.\lThe scheduler must not see it:\lthat would be clairvoyance.\l",
+      fillcolor="#f4f4f4"];
+  pq [label="Queued\lin pending_, arrived.\lWaiting on a DECISION.\l",
+      fillcolor="#f1ecf7", color="#7a5ba6"];
+  rn [label="Running\lholds resources on a node.\lWaiting on the CLOCK.\l",
+      fillcolor="#e8f3ec", color="#3f7d5a"];
+  dn [label="Done\lresources released,\ltimestamps final.\l",
+      fillcolor="#eef3fa", color="#4a6fa5"];
+
+  q  -> pq [label="  JobArrival fires\l  now_ reaches submit_time\l"];
+  pq -> rn [label="  drain() places it\l  start_time = now_\l"];
+  rn -> dn [label="  JobFinish fires\l  at start_time + duration\l"];
+
+  pq -> pq [label="  drain() ran but nothing fit  ", color="#7a5ba6"];
+}

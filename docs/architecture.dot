@@ -1,0 +1,89 @@
+// Atlas stage 1: who owns what, and how work moves during a run.
+// Companion: docs/job-lifecycle.dot
+//
+// Render:  dot -Tsvg docs/architecture.dot -o docs/architecture.svg
+//          dot -Tpng -Gdpi=150 docs/architecture.dot -o docs/architecture.png
+
+digraph atlas {
+  rankdir=TB;
+  bgcolor="white";
+  compound=true;
+  splines=spline;
+  nodesep=0.45;
+  ranksep=0.65;
+  fontname="Helvetica";
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled",
+        fillcolor="#ffffff", color="#555555", penwidth=1.1, margin="0.14,0.09"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.75];
+
+  subgraph cluster_setup {
+    label="Setup — before t = 0";
+    fontsize=11; fontcolor="#6b6b6b"; labeljust="l";
+    style="rounded,dashed"; color="#b0b0b0";
+
+    wgen   [label="WorkloadGenerator(seed, rate)\lRandomSource → profile, duration,\lPoisson arrival\l",
+            fillcolor="#eef3fa", color="#4a6fa5"];
+    sealed [label="std::vector<Job>\lthe whole workload, ids dense.\lFixed before the clock starts, so it\lcannot depend on a scheduling decision.\l",
+            shape=box3d, fillcolor="#eef3fa", color="#4a6fa5"];
+    wgen -> sealed [label="  generate(count)"];
+  }
+
+  subgraph cluster_sim {
+    label="Simulator — owns the clock, the jobs, and the backlog";
+    fontsize=11; fontcolor="#2f4f75"; labeljust="l";
+    style="rounded,filled"; fillcolor="#f7f9fc"; color="#4a6fa5";
+
+    run     [label="run()\lseed the queue, then pop until empty.\lEach pop sets now_ = event.time,\lthen std::visit dispatches.\l",
+             color="#333333", penwidth=1.7];
+    arrival [label="on_arrival(JobArrival)\lthe job becomes visible\l"];
+    finish  [label="on_finish(JobFinish)\lwrites jobs_[id]: finish_time = now_,\lstate = Done\l"];
+    drain   [label="drain()\lTHE ONLY PLACEMENT SITE\lnothing else calls Cluster::allocate.\lWrites jobs_[id]: start_time = now_,\lnode, state = Running\l",
+             fillcolor="#e8f3ec", color="#3f7d5a", penwidth=1.8];
+
+    // The four members, held on one rank so the ownership reads at a glance.
+    now     [label="now_ : Tick\lderived: only ever the timestamp\lof the event just popped\l",
+             fillcolor="#fdf6e3", color="#a8853a"];
+    queue   [label="queue_ : EventQueue\lordered by (time, seq)\lblocked on the CLOCK\l",
+             fillcolor="#fdeeee", color="#a64a4a"];
+    jobs    [label="jobs_ : vector<Job>\lthe full record, indexed by JobId\lstart/finish/state written once\l",
+             fillcolor="#eef3fa", color="#4a6fa5"];
+    pending [label="pending_ : deque<JobId>\larrived but unplaced\lblocked on a DECISION\l",
+             fillcolor="#f1ecf7", color="#7a5ba6"];
+
+    {rank=same; now; queue; jobs; pending;}
+  }
+
+  subgraph cluster_hw {
+    label="Cluster — owns machines only, never sees a Job";
+    fontsize=11; fontcolor="#3f7d5a"; labeljust="l";
+    style="rounded,filled"; fillcolor="#f5faf7"; color="#3f7d5a";
+
+    api   [label="first_fit(Resources) → NodeId?\lallocate(NodeId, Resources)\lrelease(NodeId, Resources)\l",
+           style="filled", fillcolor="#ffffff", color="#3f7d5a"];
+    nodes [label="nodes_ : vector<Node>\lcapacity fixed, free mutable\l",
+           fillcolor="#e8f3ec", color="#3f7d5a"];
+    api -> nodes [label="  mutates free", color="#3f7d5a"];
+  }
+
+  // Construction: the sealed workload is moved in and becomes jobs_.
+  sealed -> jobs [label="  moved in at construction  ", color="#4a6fa5", weight=3];
+
+  // The spine. pop() is the only thing that advances time.
+  run -> queue [label="  seed: one JobArrival per job,\l  one SimEnd\l", color="#a64a4a", weight=3];
+  queue -> run [label="  pop() → the next event\l  assert time never decreases\l",
+                color="#a64a4a", penwidth=1.7, constraint=false];
+
+  run -> arrival [label="  std::visit  ", penwidth=1.5];
+  run -> finish  [label="  std::visit  ", penwidth=1.5];
+
+  arrival -> pending [label="  push_back(id)  ", color="#7a5ba6", constraint=false];
+  finish  -> api     [label="  release(node, request)  ", color="#3f7d5a", lhead=cluster_hw];
+
+  // Both handlers end here, exactly once. This is the invariant, drawn.
+  arrival -> drain [label="  then drain once  ", penwidth=1.7, color="#3f7d5a"];
+  finish  -> drain [label="  then drain once  ", penwidth=1.7, color="#3f7d5a"];
+
+  drain -> pending [label="  take placed ids  ", color="#7a5ba6", dir=both];
+  drain -> queue   [label="  schedule JobFinish\l  at now_ + duration\l", color="#a64a4a"];
+  drain -> api     [label="  first_fit → allocate  ", color="#3f7d5a", lhead=cluster_hw];
+}
