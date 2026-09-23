@@ -1,0 +1,11 @@
+# Commits that only reformatted code, listed so `git blame` looks straight
+# through them to the commit that actually wrote each line. Add a commit here
+# only when it changed no behavior at all.
+#
+# Enable locally (once per clone; this setting is not itself committed):
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub reads this file automatically.
+
+# Formats code files via clang-format with Google base rules
+f2f1ebe5f1717edd13d5a034b018a6843fe2b914
