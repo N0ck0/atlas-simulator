@@ -1,4 +1,5 @@
-// Atlas stage 1: who owns what, and how work moves during a run.
+// Atlas stage 1 (through step 1.5): who owns what, and how work moves during
+// a run, including the metrics and the trace.
 // Companion: docs/job-lifecycle.dot
 //
 // Render:  dot -Tsvg docs/architecture.dot -o docs/architecture.svg
@@ -40,7 +41,8 @@ digraph atlas {
     drain   [label="drain()\lTHE ONLY PLACEMENT SITE\lnothing else calls Cluster::allocate.\lWrites jobs_[id]: start_time = now_,\lnode, state = Running\l",
              fillcolor="#e8f3ec", color="#3f7d5a", penwidth=1.8];
 
-    // The four members, held on one rank so the ownership reads at a glance.
+    // The members, with the four that existed before 1.5 held on one rank so
+    // the ownership reads at a glance.
     now     [label="now_ : Tick\lderived: only ever the timestamp\lof the event just popped\l",
              fillcolor="#fdf6e3", color="#a8853a"];
     queue   [label="queue_ : EventQueue\lordered by (time, seq)\lblocked on the CLOCK\l",
@@ -49,6 +51,11 @@ digraph atlas {
              fillcolor="#eef3fa", color="#4a6fa5"];
     pending [label="pending_ : deque<JobId>\larrived but unplaced\lblocked on a DECISION\l",
              fillcolor="#f1ecf7", color="#7a5ba6"];
+
+    simend  [label="on_sim_end(SimEnd)\lthe run's upper limit: closes the\lintegral and sets sim_end_ = now_\l",
+             fillcolor="#fdf6e3", color="#a8853a"];
+    util    [label="util_ : UtilizationIntegral\lsim_end_ : Tick\ltime-weighted, advanced at every event\lBEFORE the handler changes state\l",
+             fillcolor="#fdf6e3", color="#a8853a"];
 
     {rank=same; now; queue; jobs; pending;}
   }
@@ -69,12 +76,17 @@ digraph atlas {
   sealed -> jobs [label="  moved in at construction  ", color="#4a6fa5", weight=3];
 
   // The spine. pop() is the only thing that advances time.
-  run -> queue [label="  seed: one JobArrival per job,\l  one SimEnd\l", color="#a64a4a", weight=3];
+  run -> queue [label="  seed: one JobArrival per job.\l  When the queue drains, one SimEnd\l  at now_ closes the run.\l",
+                color="#a64a4a", weight=3];
   queue -> run [label="  pop() → the next event\l  assert time never decreases\l",
                 color="#a64a4a", penwidth=1.7, constraint=false];
 
   run -> arrival [label="  std::visit  ", penwidth=1.5];
   run -> finish  [label="  std::visit  ", penwidth=1.5];
+  run -> simend  [label="  std::visit  ", penwidth=1.5];
+
+  run    -> util [label="  advance(now_, total_utilized())\l  before dispatch, never sampled\l", color="#a8853a"];
+  simend -> util [label="  final advance  ", color="#a8853a", constraint=false];
 
   arrival -> pending [label="  push_back(id)  ", color="#7a5ba6", constraint=false];
   finish  -> api     [label="  release(node, request)  ", color="#3f7d5a", lhead=cluster_hw];
@@ -86,4 +98,28 @@ digraph atlas {
   drain -> pending [label="  take placed ids  ", color="#7a5ba6", dir=both];
   drain -> queue   [label="  schedule JobFinish\l  at now_ + duration\l", color="#a64a4a"];
   drain -> api     [label="  first_fit → allocate  ", color="#3f7d5a", lhead=cluster_hw];
+
+  subgraph cluster_trace {
+    label="TraceWriter — optional JSONL log, observes and owns nothing";
+    fontsize=11; fontcolor="#6b6b6b"; labeljust="l";
+    style="rounded,dashed"; color="#b0b0b0";
+
+    trace [label="job_spec(Job)   the workload, once, before t = 0\lwrite(Event)    every event, in pop order\lplacement(...)  drain() dispatches no event,\l                so start times would otherwise\l                be invisible in the trace\l",
+           fillcolor="#f7f7f7", color="#777777"];
+  }
+
+  run   -> trace [label="  write(e) after pop  ", style=dashed, color="#777777"];
+  drain -> trace [label="  placement record  ", style=dashed, color="#777777"];
+
+  subgraph cluster_after {
+    label="After run() returns — offline, reads jobs_ only";
+    fontsize=11; fontcolor="#6b6b6b"; labeljust="l";
+    style="rounded,dashed"; color="#b0b0b0";
+
+    metrics [label="turnaround_times / queue_wait_times → TimeSample\l  censored jobs counted, never silently dropped\lpercentiles() → p50 / p95 / p99  (reorders its input)\lmean_utilization() → LoadFactor\l",
+             fillcolor="#eef3fa", color="#4a6fa5"];
+  }
+
+  jobs -> metrics [label="  the finished record  ", color="#4a6fa5", style=dashed];
+  util -> metrics [label="  integral / sim_end_  ", color="#a8853a", style=dashed];
 }

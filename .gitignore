@@ -17,8 +17,10 @@ dist/
 
 # Simulation output
 *.ndjson
+*.jsonl
 runs/
 !tests/golden/*.ndjson
+!tests/golden/*.jsonl
 
 # Editor / OS
 .vscode/

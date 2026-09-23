@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <queue>
 #include <random>
@@ -23,6 +24,9 @@
 #include <optional>
 #include <type_traits>
 #include <algorithm>
+#include <charconv>
+#include <cstring>
+#include <string>
 #include <format>
 
 // Simulated time in microseconds. Integer rather than floating point so that
@@ -66,6 +70,16 @@ struct Event {
     Tick time;
     std::uint64_t seq;  // insertion order; breaks ties at equal time
     EventPayload payload;
+};
+
+// Run parameters, all overridable from the command line so that rho can be
+// swept without a recompile.
+struct Options {
+    std::uint64_t seed = 7;
+    std::uint32_t nodes = 8;
+    std::uint32_t jobs = 2'000;
+    double arrival_rate = 0.025;  // jobs per second
+    const char* trace_path = nullptr;
 };
 
 // Earliest time first, then insertion order. std::priority_queue is a max-heap
@@ -171,6 +185,21 @@ TimeSample turnaround_times(const std::vector<Job>& jobs){
             continue;
         }
         res.push_back(job.finish_time - job.submit_time);
+    }
+    return TimeSample{skipped_jobs, std::move(res)};
+}
+
+// Records the queue wait times of each job
+// Includes amount of jobs that didn't start in return struct
+TimeSample queue_wait_times(const std::vector<Job>& jobs){
+    std::vector<Tick> res;
+    std::size_t skipped_jobs = 0;
+    for (const Job& job : jobs){
+        if (job.start_time == kNever){
+            skipped_jobs++;
+            continue;
+        }
+        res.push_back(job.start_time - job.submit_time);
     }
     return TimeSample{skipped_jobs, std::move(res)};
 }
@@ -460,6 +489,7 @@ constexpr JobProfile kJobProfiles[] = {
     {"medium", {4u, 8'192u}, 120 * kSecond},
     {"large", {16u, 32'768u}, 600 * kSecond},
 };
+constexpr Resources kDefaultResources{16u, 65'536u};
 
 // Offered load as a fraction of capacity, per dimension. At or above 1.0 the
 // cluster cannot keep up: the queue grows without bound and mean completion
@@ -709,14 +739,18 @@ struct Percentiles {
 // Precondition: values is non-empty.
 Percentiles percentiles(std::vector<Tick>& values);
 
-// JSONL event trace: one JSON object per line, so a run can be streamed,
-// tailed, and diffed. Writes nothing when constructed with a null path.
+// JSONL event trace: one JSON object per line, so a run is diffable and can be
+// processed a record at a time rather than parsed whole. Writes nothing when
+// Options::trace_path is null.
+//
+// Output is block-buffered, so the file is only complete once the writer is
+// destroyed; scope it accordingly if something else is going to read it.
 class TraceWriter {
 public:
-    TraceWriter(const char* path, std::uint64_t seed);
+    explicit TraceWriter(const Options& opt);
     ~TraceWriter();
     TraceWriter(const TraceWriter&) = delete;
-    const TraceWriter& operator=(TraceWriter&) = delete;
+    TraceWriter& operator=(const TraceWriter&) = delete;
 
     void write(const Event& e);
 
@@ -791,14 +825,16 @@ Percentiles percentiles(std::vector<Tick>& values) {
                        values[static_cast<std::size_t>(i99)]};
 }
 
-TraceWriter::TraceWriter(const char* path, std::uint64_t seed) {
+TraceWriter::TraceWriter(const Options& opt) {
+    const char* path = opt.trace_path;
     if (path == nullptr) return;
     out_ = std::fopen(path, "w");
     if (out_ == nullptr){
         std::perror(path);
         return;
     }
-    write_line(std::format(R"({{"ev":"header","seed":{}}})", seed));
+    write_line(std::format(R"({{"ev":"header","seed":{},"nodes":{},"jobs":{},"arrival_rate":{}}})",
+         opt.seed, opt.nodes, opt.jobs, opt.arrival_rate));
 }
 
 // Every record goes through here, so the one-object-per-line invariant is
@@ -1216,23 +1252,137 @@ static bool check_cluster() {
     return ok;
 }
 
-// Run parameters, all overridable from the command line so that rho can be
-// swept without a recompile.
-struct Options {
-    std::uint64_t seed = 7;
-    std::uint32_t nodes = 8;
-    std::uint32_t jobs = 2'000;
-    double arrival_rate = 0.025;  // jobs per second
-    const char* trace_path = nullptr;
+// A command line has three outcomes, not two: run with these options, print
+// usage and stop successfully (--help), or reject. std::optional collapses the
+// middle case into the error case, which is why --help used to exit 2.
+struct ParsedArgs {
+    enum class Status : std::uint8_t { Run, HelpRequested, Error };
+
+    Status status = Status::Error;
+    Options options{};
 };
 
-// nullopt on a bad argument, after printing usage.
-std::optional<Options> parse_args(int argc, char** argv);
+// Prints usage on both --help and rejection; `options` is meaningful only when
+// status is Run.
+ParsedArgs parse_args(int argc, char** argv);
 
-std::optional<Options> parse_args(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
-    return Options{};  // TODO
+static void print_usage(const char* program) {
+    std::fprintf(stderr,
+                 "usage: %s [options]\n"
+                 "  with no options, runs the built-in self-checks instead.\n\n"
+                 "  --seed N      random seed (default 7)\n"
+                 "  --nodes N     nodes in the cluster (default 8)\n"
+                 "  --jobs N      jobs to generate (default 2000)\n"
+                 "  --rate F      arrivals per second (default 0.025)\n"
+                 "  --trace PATH  write a JSONL event trace to PATH\n"
+                 "  --help        this message\n",
+                 program);
+}
+
+// Parses the whole of `text` into `out`. from_chars rather than atoi/strtoul:
+// it reports trailing garbage ("12abc") and overflow instead of silently
+// truncating, and it is locale-independent, which matters for --rate.
+template <typename T>
+static bool parse_value(const char* text, T& out) {
+    const char* const last = text + std::strlen(text);
+    const auto [ptr, ec] = std::from_chars(text, last, out);
+    return ec == std::errc{} && ptr == last;
+}
+
+ParsedArgs parse_args(int argc, char** argv) {
+    Options opts;
+    const char* const program = (argc > 0) ? argv[0] : "atlas";
+
+    for (int i = 1; i < argc; ++i) {
+        const char* const flag = argv[i];
+
+        if (std::strcmp(flag, "--help") == 0 || std::strcmp(flag, "-h") == 0) {
+            print_usage(program);
+            return ParsedArgs{ParsedArgs::Status::HelpRequested, {}};
+        }
+
+        // Every remaining flag takes a value, so the bounds check lives here
+        // once. Without it a trailing "--seed" reads argv[argc], which is the
+        // null terminator at best and past the end at worst.
+        if (i + 1 >= argc) {
+            std::fprintf(stderr, "%s: missing value for %s\n", program, flag);
+            print_usage(program);
+            return ParsedArgs{ParsedArgs::Status::Error, {}};
+        }
+        const char* const value = argv[++i];
+
+        bool parsed = true;
+        if (std::strcmp(flag, "--seed") == 0) {
+            parsed = parse_value(value, opts.seed);
+        } else if (std::strcmp(flag, "--nodes") == 0) {
+            parsed = parse_value(value, opts.nodes);
+        } else if (std::strcmp(flag, "--jobs") == 0) {
+            parsed = parse_value(value, opts.jobs);
+        } else if (std::strcmp(flag, "--rate") == 0) {
+            parsed = parse_value(value, opts.arrival_rate);
+        } else if (std::strcmp(flag, "--trace") == 0) {
+            opts.trace_path = value;
+        } else {
+            std::fprintf(stderr, "%s: unknown option %s\n", program, flag);
+            print_usage(program);
+            return ParsedArgs{ParsedArgs::Status::Error, {}};
+        }
+
+        if (!parsed) {
+            std::fprintf(stderr, "%s: bad value for %s: %s\n", program, flag, value);
+            return ParsedArgs{ParsedArgs::Status::Error, {}};
+        }
+    }
+
+    // Range is checked separately from syntax: "0" parses perfectly well and
+    // then divides by zero in the utilization denominator, and a zero rate
+    // trips an assert inside WorkloadGenerator rather than printing usage.
+    const char* problem = nullptr;
+    if (opts.nodes == 0) problem = "--nodes must be at least 1";
+    else if (opts.jobs == 0) problem = "--jobs must be at least 1";
+    else if (!(opts.arrival_rate > 0.0)) problem = "--rate must be positive";
+    if (problem != nullptr) {
+        std::fprintf(stderr, "%s: %s\n", program, problem);
+        return ParsedArgs{ParsedArgs::Status::Error, {}};
+    }
+
+    return ParsedArgs{ParsedArgs::Status::Run, opts};
+}
+
+static double seconds(Tick t) {
+    return static_cast<double>(t) / static_cast<double>(kSecond);
+}
+
+// Takes the sample by value because percentiles() reorders what it is given:
+// the copy makes that explicit at the call site rather than surprising a
+// caller who still wanted the original order.
+static void report_sample(const char* label, TimeSample sample) {
+    if (sample.times.empty()) {
+        std::printf("  %-12s  no samples        (%zu censored)\n", label,
+                    sample.skipped);
+        return;
+    }
+    const Percentiles p = percentiles(sample.times);
+    std::printf("  %-12s  p50 %8.1fs  p95 %8.1fs  p99 %8.1fs  (%zu censored)\n",
+                label, seconds(p.p50), seconds(p.p95), seconds(p.p99),
+                sample.skipped);
+}
+
+// Human-readable summary of a finished run. Ticks become seconds only here;
+// the trace keeps raw integers so its hash stays stable across builds.
+// Precondition: sim.run() has returned.
+void report(const Simulator& sim, const Options& opts) {
+    const LoadFactor rho = offered_load(sim.jobs(), sim.cluster());
+    const LoadFactor util = sim.mean_utilization();
+
+    std::printf("run: seed %llu  nodes %u  jobs %u  rate %g/s\n",
+                static_cast<unsigned long long>(opts.seed), opts.nodes,
+                opts.jobs, opts.arrival_rate);
+    std::printf("  span          %12.1fs\n", seconds(sim.now()));
+    std::printf("  offered rho   cores %.4f  memory %.4f\n", rho.cores, rho.memory);
+    std::printf("  utilization   cores %.4f  memory %.4f\n", util.cores, util.memory);
+    report_sample("turnaround", turnaround_times(sim.jobs()));
+    report_sample("queue wait", queue_wait_times(sim.jobs()));
 }
 
 static bool check_metrics() {
@@ -1287,18 +1437,72 @@ static bool check_metrics() {
                     got.cores, expected_cores);
     }
 
-    // TODO(nick): remaining 1.5 acceptance checks -- identical output hash
-    // across -O0 and -O2, more nodes lowering mean queue time, and queueing
-    // exploding as rho approaches 1. Percentiles and the trace are still
-    // unimplemented.
+    // Mean rather than a percentile: at these cluster sizes the median queue
+    // wait bottoms out at zero and stops discriminating, so it cannot detect
+    // an improvement that only affects the tail.
+    auto mean_queue_wait = [](std::uint32_t nodes, double rate) {
+        WorkloadGenerator g(kSeed, rate);
+        Simulator sim(Cluster(nodes, kPerNode), g.generate(kCount));
+        sim.run();
+        const TimeSample sample = queue_wait_times(sim.jobs());
+        assert(sample.skipped == 0);  // censored waits would not be comparable
+        Tick total = 0;
+        for (Tick t : sample.times) total += t;
+        return static_cast<double>(total) /
+               static_cast<double>(sample.times.size()) / 1e6;
+    };
 
-    std::printf("%s  metrics: utilization integral\n", ok ? "PASS" : "FAIL");
+    // Capacity relieves queueing. A metric that moves the wrong way here is
+    // measuring something other than what it claims to.
+    {
+        const double small = mean_queue_wait(8u, kRate);
+        const double large = mean_queue_wait(16u, kRate);
+        expect(large < small, "more nodes lowers mean queue time");
+        std::printf("    queue wait: 8 nodes %.1fs -> 16 nodes %.1fs\n", small,
+                    large);
+    }
+
+    // Queueing must grow faster than load does. Three equally spaced rates:
+    // if wait time were merely proportional to rho the two increments would
+    // match, so convexity is what separates a queueing system from a
+    // stopwatch. Compared as increments rather than ratios because the first
+    // wait can be near zero.
+    {
+        const double w1 = mean_queue_wait(8u, 0.025);
+        const double w2 = mean_queue_wait(8u, 0.030);
+        const double w3 = mean_queue_wait(8u, 0.035);
+        expect(w1 < w2 && w2 < w3, "queue time grows with arrival rate");
+        expect((w3 - w2) > (w2 - w1), "queue time grows superlinearly as rho -> 1");
+        std::printf("    queue wait vs rate: %.1fs -> %.1fs -> %.1fs\n", w1, w2, w3);
+    }
+
+    // The third acceptance check, identical output across -O0 and -O2, needs
+    // two binaries and so cannot live here: see `make check-determinism`.
+
+    std::printf("%s  metrics: utilization integral, queueing response\n",
+                ok ? "PASS" : "FAIL");
     return ok;
 }
 
 int main(int argc, char** argv) {
-    const std::optional<Options> opts = parse_args(argc, argv);
-    if (!opts) return 2;
+    const ParsedArgs parsed = parse_args(argc, argv);
+    if (parsed.status == ParsedArgs::Status::HelpRequested) return 0;
+    if (parsed.status == ParsedArgs::Status::Error) return 2;
+
+    // Arguments mean "run the simulation"; bare `atlas` runs the self-checks,
+    // which is what `make run` relies on.
+    if (argc > 1){
+        const Options opt = parsed.options;
+        Cluster main_cluster = Cluster{opt.nodes, kDefaultResources};
+        WorkloadGenerator work_gen = WorkloadGenerator(opt.seed, opt.arrival_rate);
+        std::vector<Job> jobs = work_gen.generate(opt.jobs);
+        TraceWriter writer{opt};
+        Simulator sim = Simulator(std::move(main_cluster), std::move(jobs), &writer);
+        sim.run();
+
+        report(sim, opt);
+        return 0;
+    }
 
     const bool queue_ok = check_event_queue();
     const bool cluster_ok = check_cluster();
