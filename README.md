@@ -3,8 +3,8 @@
 A discrete-event simulator for experimentally evaluating datacenter scheduling policies.
 
 > **Status: early development.** Stage 1 is complete — the simulator runs end to end,
-> reports metrics, and emits a trace. Everything else on the roadmap is not implemented;
-> unchecked boxes mean exactly that.
+> reports metrics, and emits a trace. Stage 2 is in progress. Everything else on the
+> roadmap is not implemented; unchecked boxes mean exactly that.
 
 ## What this is
 
@@ -21,24 +21,32 @@ you did, fast enough to sweep hundreds of configurations and answer questions li
 Simulated time advances by jumping from event to event rather than ticking forward,
 so hours of datacenter activity run in seconds of wall-clock time.
 
-## Planned architecture
+## Architecture
 
 ```
-              Python  ──  experiments, analysis, dashboard
+              Python  ──  experiments, analysis, dashboard        (S6)
                  │
                  │  pybind11
                  ▼
               libatlas  (C++20)
                  │
-     engine/  event queue, simulated clock
-     model/   nodes, racks, jobs
-     net/     topology, flows, bandwidth sharing
-     sched/   pluggable scheduler interface
-     metrics/ utilization, latency percentiles
+     engine/  clock, ids, events, event queue, simulator
+     model/   resources, nodes, jobs, cluster, random, workload
+     metrics/ load factor, utilization integral, percentiles
+     io/      CLI options, JSONL trace, run report
+     net/     topology, flows, bandwidth sharing                  (S5)
+     sched/   pluggable scheduler interface                       (S3)
 ```
 
-Stage 1 lives in a single translation unit, `src/atlas.cpp`. The split into the
-directories above happens in S2, alongside CMake and GoogleTest.
+`libatlas` is a static library; `src/main.cpp` is a thin CLI on top of it. Everything
+lives in a flat `namespace atlas`, and includes are written from `src/` down, so a
+header's path names its module:
+
+```cpp
+#include "atlas/engine/event_queue.hpp"
+```
+
+Directories marked with a stage do not exist yet.
 
 ## Roadmap
 

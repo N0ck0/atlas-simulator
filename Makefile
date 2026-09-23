@@ -66,18 +66,23 @@ test: debug
 determinism: build/debug/CMakeCache.txt
 	cmake --build --preset debug --target check-determinism
 
-# Reformats every tracked C/C++ source in place, using the rules in
-# .clang-format. Safe to run at any time: clang-format changes whitespace and
-# include order only.
-fmt:
-	git ls-files '*.cpp' '*.hpp' | xargs clang-format -i
+# Every C++ source git knows about, tracked or not. --others --exclude-standard
+# adds files that are new but not gitignored: without them a brand-new file is
+# silently skipped, and a formatting gate that passes because it checked nothing
+# is worse than no gate at all. -r stops xargs running clang-format with no
+# arguments, which would make it wait on stdin.
+ATLAS_SOURCES = git ls-files --cached --others --exclude-standard '*.cpp' '*.hpp'
 
-# Reports which files are not formatted correctly, without editing anything,
-# and exits non-zero if any are. This is what CI runs from step 2.7. Note that
-# clang-format output varies between major versions, so CI pins the same
-# version installed here (18).
+# Reformats every source in place using the rules in .clang-format. Safe to run
+# at any time: clang-format changes whitespace and include order only.
+fmt:
+	$(ATLAS_SOURCES) | xargs -r clang-format -i
+
+# Reports which files are not formatted correctly, without editing anything, and
+# exits non-zero if any are. This is what CI runs from step 2.7. clang-format
+# output varies between major versions, so CI pins the version installed here (18).
 fmt-check:
-	git ls-files '*.cpp' '*.hpp' | xargs clang-format --dry-run --Werror
+	$(ATLAS_SOURCES) | xargs -r clang-format --dry-run --Werror
 
 # Deletes every generated file. All build output lives under build/, so this is
 # a complete reset; the next build reconfigures from scratch. trace.jsonl goes
