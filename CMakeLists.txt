@@ -50,11 +50,38 @@ target_include_directories(atlas_lib PUBLIC src)
 target_link_libraries(atlas_lib PRIVATE atlas_warnings)
 set_target_properties(atlas_lib PROPERTIES OUTPUT_NAME atlas)
 
-# The CLI. Thin by design: argument parsing lives in the library, so main() only
-# chooses between running the self-checks and running one simulation.
-# selfcheck.cpp is transitional, and moves into GoogleTest cases in step 2.5.
-add_executable(atlas src/main.cpp src/selfcheck.cpp)
+# The CLI. Thin by design: everything it does lives in the library, so main()
+# only wires a cluster, a workload and a trace writer together and runs them.
+add_executable(atlas src/main.cpp)
 target_link_libraries(atlas PRIVATE atlas_lib atlas_warnings)
+
+option(ATLAS_BUILD_TESTS "Build the test suite" ON)
+
+if(ATLAS_BUILD_TESTS)
+  include(FetchContent)
+
+  # Downloaded at configure time and built as part of this build, so a fresh
+  # clone needs only cmake -- no install step, no submodule. Pinned to a release
+  # tag rather than a branch: a dependency that moves on its own would make the
+  # determinism guarantee a statement about today's checkout only.
+  # v1.15.2 is b514bdc898e2951020cbdca1304b75f5950d1f59.
+  FetchContent_Declare(googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG v1.15.2
+    GIT_SHALLOW TRUE)
+
+  # GoogleMock is a separate mock-object library in the same repository and is
+  # not used here; skipping it roughly halves the dependency build.
+  set(BUILD_GMOCK OFF)
+  set(INSTALL_GTEST OFF)
+
+  FetchContent_MakeAvailable(googletest)
+
+  # Must be called from the top-level list file, not from tests/, or ctest
+  # writes its test list somewhere ctest --preset will not look for it.
+  enable_testing()
+  add_subdirectory(tests)
+endif()
 
 # Invariant 4 needs two binaries built at different optimization levels, so it
 # cannot be a normal test target. Temporary scaffolding: it becomes a ctest

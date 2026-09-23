@@ -66,7 +66,7 @@ Requires a C++20 compiler, CMake 3.25+, and Ninja.
 ```bash
 cmake --preset debug          # also: release, asan
 cmake --build --preset debug
-./build/debug/atlas           # the self-checks: six suites covering every component
+./build/debug/atlas           # one simulation at the default operating point
 ```
 
 There is a `Makefile` for the commands you type most. It is a wrapper — every recipe
@@ -75,7 +75,7 @@ interchangeable:
 
 ```bash
 make            # build the debug preset
-make run        # build, then run the self-checks
+make test       # the test suite: 39 GoogleTest cases
 make asan       # build with ASan + UBSan
 make help       # every target
 ```

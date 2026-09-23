@@ -16,7 +16,7 @@ if the answer is none.
 ## Current state
 
 - **Stage:** S1 complete (steps 1.1-1.5). S2 in progress: 2.1 (CMake), 2.2
-  (clang-format) and 2.3 (header split) done.
+  (clang-format), 2.3 (header split), 2.4 (GoogleTest) and 2.5 (tests ported) done.
 - **What exists:** `libatlas`, a static library of 25 headers and 8 sources under
   `src/atlas/`, plus a thin CLI. Everything is in a flat `namespace atlas`, and
   includes are written from `src/` down (`#include "atlas/engine/clock.hpp"`).
@@ -26,13 +26,12 @@ if the answer is none.
   - `metrics/` — `load_factor`, `time_sample`, `percentiles`, `utilization`,
     `offered_load`
   - `io/` — `options` (CLI parsing), `trace`, `report`
-  - `src/main.cpp` is the CLI; `src/selfcheck.cpp` holds the six `check_*()`
-    functions and is transitional, replaced by GoogleTest cases in 2.5.
+  - `src/main.cpp` is the CLI, and the only source outside the library.
 - **A run reports.** `SimEnd` is scheduled at `now_` once the queue drains, and its
   handler closes the utilization integral — which is what gives the integral a
-  definite upper limit. `atlas` with no arguments runs the self-checks; with any
-  argument it runs one simulation and prints offered rho, achieved utilization,
-  turnaround and queue-wait percentiles, and the censored counts.
+  definite upper limit. `atlas` runs one simulation and prints offered rho,
+  achieved utilization, turnaround and queue-wait percentiles, and the censored
+  counts; every option has a default, so a bare `atlas` is a valid run.
 - **Placement is strict FIFO.** `drain()` stops at the head of `pending_` when it
   does not fit, so a large job blocks smaller ones behind it. At the default
   operating point this costs nothing at the median — p50 queue wait is 0s — and
@@ -43,9 +42,13 @@ if the answer is none.
   large `skipped` beside a near-zero utilization is the signature of a cluster that
   cannot fit part of its own workload, and it is how the node/profile capacity
   mismatch in step 1.5 was caught.
-- **Self-checks:** six `check_*()` functions in `src/selfcheck.cpp`, called from
-  `main`, which exits non-zero on failure. They stand in for real tests until
-  GoogleTest arrives in 2.4.
+- **Tests:** GoogleTest via `FetchContent`, pinned to v1.15.2, in `tests/`
+  mirroring `src/`. One binary, `atlas_tests`; `gtest_discover_tests` registers
+  each case with ctest individually, so `ctest -R` and `ctest -j` work.
+- **Correctness lives in `tests/`.** The six `check_*()` functions that stood in
+  for tests through S1 are gone; their claims are 39 GoogleTest cases. The
+  determinism acceptance check still cannot be one of them — it needs two
+  binaries at once — and stays in `cmake/CheckDeterminism.cmake` until 2.6.
   Each new step adds one; earlier ones stay as regression guards. The seventh
   acceptance check compares two binaries at once, so it cannot be one of them and
   lives in `cmake/CheckDeterminism.cmake`, driven by the `check-determinism` target.
@@ -54,10 +57,10 @@ if the answer is none.
 
 ### Next: S2, CMake and real tests
 
-CMake and presets (2.1), `.clang-format` (2.2) and the header split (2.3) are in place.
-Still ahead: GoogleTest via `FetchContent` (2.4), moving the six `check_*()` functions
-into test cases (2.5), turning `check-determinism` into a golden-trace test (2.6), and
-GitHub Actions with the warning set as an error (2.7).
+CMake and presets (2.1), `.clang-format` (2.2), the header split (2.3) and GoogleTest
+(2.4) and the ported test suite (2.5) are in place. Still ahead: turning
+`check-determinism` into a golden-trace test (2.6), and GitHub Actions with the warning
+set as an error (2.7).
 
 ## Architecture decisions (settled)
 
@@ -139,11 +142,10 @@ load-bearing.
 make                    # build the debug preset (the default target)
 make release            # build optimized
 make asan               # build with ASan + UBSan
-make run                # build, then run the six self-checks
-make run-asan           # the same self-checks under the sanitizers
 make sim                # build, then run one simulation and report;
                         # override any parameter: make sim NODES=16 RATE=0.035
-make test               # ctest; registers no cases until step 2.4
+make test               # run the test suite through ctest
+make test-asan          # the same suite under ASan + UBSan
 make determinism        # identical trace across -O0 and -O2
 make fmt                # reformat all sources with clang-format
 make fmt-check          # report unformatted files without editing
@@ -159,7 +161,7 @@ cmake --build --preset debug    # build build/debug/atlas
 ctest --preset debug
 cmake --build --preset debug --target check-determinism
 
-./build/debug/atlas             # no arguments: the six self-checks
+./build/debug/atlas             # one simulation at the default operating point
 ./build/debug/atlas --seed 7 --nodes 8 --jobs 2000 --rate 0.025 --trace trace.jsonl
 ```
 

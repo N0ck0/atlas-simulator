@@ -31,18 +31,9 @@ release: build/release/CMakeCache.txt
 asan: build/asan/CMakeCache.txt
 	cmake --build --preset asan
 
-# Runs the six self-checks, which is what `atlas` does with no arguments.
-# Builds first, so this can never run a stale binary.
-run: debug
-	./build/debug/atlas
-
-# The same self-checks under the sanitizers, where a memory bug shows up.
-run-asan: asan
-	./build/asan/atlas
-
-# Runs one simulation and prints the report. Any argument puts `atlas` in
-# simulate mode rather than self-check mode. Every parameter is overridable on
-# the command line, so an operating point can be swept without editing anything:
+# Runs one simulation and prints the report, which is all a bare `atlas` does.
+# Every parameter is overridable on the command line, so an operating point can
+# be swept without editing anything:
 #   make sim NODES=16 RATE=0.035
 SEED  ?= 7
 NODES ?= 8
@@ -54,10 +45,16 @@ sim: debug
 	./build/debug/atlas --seed $(SEED) --nodes $(NODES) --jobs $(JOBS) \
 	                    --rate $(RATE) --trace $(TRACE)
 
-# Runs the test executables registered with CMake and reports pass/fail per
-# case. Nothing is registered until step 2.4, so this reports zero tests today.
+# Runs the GoogleTest suite through ctest, which reports pass/fail per case.
+# ctest rather than the test binary directly because it is the layer that also
+# runs non-GoogleTest checks -- the golden-trace comparison arriving in 2.6.
 test: debug
 	ctest --preset debug
+
+# The same suite under ASan and UBSan. Slower, and the only place a memory bug
+# in the code under test will actually announce itself.
+test-asan: asan
+	ctest --preset asan
 
 # Invariant 4: the same seed must produce a byte-identical trace regardless of
 # optimization level. Builds atlas twice, at -O0 and -O2, runs both, and
@@ -97,12 +94,11 @@ help:
 	@printf '  make release    build optimized\n'
 	@printf '  make asan       build with ASan + UBSan\n'
 	@printf '\n'
-	@printf '  make run        build debug, then run the six self-checks\n'
-	@printf '  make run-asan   the same self-checks under the sanitizers\n'
 	@printf '  make sim        build debug, then run one simulation and report\n'
 	@printf '                  overridable: make sim NODES=16 RATE=0.035\n'
 	@printf '\n'
-	@printf '  make test       ctest (registers no cases until step 2.4)\n'
+	@printf '  make test       run the test suite through ctest\n'
+	@printf '  make test-asan  the same suite under ASan + UBSan\n'
 	@printf '  make determinism  identical trace across -O0 and -O2\n'
 	@printf '  make fmt        reformat all sources with clang-format\n'
 	@printf '  make fmt-check  report unformatted files without editing\n'
@@ -111,4 +107,4 @@ help:
 	@printf 'The underlying commands, if you prefer them directly:\n'
 	@printf '  cmake --preset debug && cmake --build --preset debug\n'
 
-.PHONY: debug release asan run run-asan sim test determinism fmt fmt-check clean help
+.PHONY: debug release asan sim test test-asan determinism fmt fmt-check clean help
