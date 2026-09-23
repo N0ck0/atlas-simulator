@@ -8,26 +8,25 @@
 //   g++ -std=c++20 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2
 //       -o atlas src/atlas.cpp && ./atlas
 
+#include <algorithm>
+#include <cassert>
+#include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <deque>
-#include <queue>
-#include <random>
-#include <cmath>
-#include <variant>
-#include <vector>
-#include <cassert>
-#include <utility>
+#include <format>
 #include <limits>
 #include <optional>
-#include <type_traits>
-#include <algorithm>
-#include <charconv>
-#include <cstring>
+#include <queue>
+#include <random>
 #include <string>
-#include <format>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
 // Simulated time in microseconds. Integer rather than floating point so that
 // arithmetic stays exact and results are identical across optimization levels.
@@ -35,7 +34,7 @@ using Tick = std::uint64_t;
 
 constexpr Tick kMicrosecond = 1;
 constexpr Tick kMillisecond = 1'000;
-constexpr Tick kSecond      = 1'000'000;
+constexpr Tick kSecond = 1'000'000;
 
 // Distinct types, layout-identical to uint32_t, so a JobId cannot be passed
 // where a NodeId is expected. Construct with JobId{7}.
@@ -87,7 +86,7 @@ struct Options {
 // inverted. Strict weak ordering requires > rather than >=.
 struct EarliestFirst {
     bool operator()(const Event& a, const Event& b) const {
-        if (a.time == b.time){
+        if (a.time == b.time) {
             return a.seq > b.seq;
         }
         return a.time > b.time;
@@ -176,11 +175,11 @@ struct TimeSample {
 // Records the turnaround times of each job
 // Includes amount of jobs that didn't finish in skipped, unfinished jobs don't appear returned vector
 // Silently dropping skipped jobs would bias times downward without explanation
-TimeSample turnaround_times(const std::vector<Job>& jobs){
+TimeSample turnaround_times(const std::vector<Job>& jobs) {
     std::vector<Tick> res;
     std::size_t skipped_jobs = 0;
-    for (const Job& job : jobs){
-        if (job.state != JobState::Done){
+    for (const Job& job : jobs) {
+        if (job.state != JobState::Done) {
             skipped_jobs++;
             continue;
         }
@@ -191,11 +190,11 @@ TimeSample turnaround_times(const std::vector<Job>& jobs){
 
 // Records the queue wait times of each job
 // Includes amount of jobs that didn't start in return struct
-TimeSample queue_wait_times(const std::vector<Job>& jobs){
+TimeSample queue_wait_times(const std::vector<Job>& jobs) {
     std::vector<Tick> res;
     std::size_t skipped_jobs = 0;
-    for (const Job& job : jobs){
-        if (job.start_time == kNever){
+    for (const Job& job : jobs) {
+        if (job.start_time == kNever) {
             skipped_jobs++;
             continue;
         }
@@ -219,7 +218,7 @@ public:
     // First-fit is the Stage 1 placeholder; S3 replaces it with a pluggable
     // Scheduler interface.
     std::optional<NodeId> first_fit(const Resources& request) const {
-        for (const Node& node : nodes_){
+        for (const Node& node : nodes_) {
             if (node.can_fit(request)) {
                 return node.id;
             }
@@ -232,7 +231,6 @@ public:
     void allocate(NodeId id, const Resources& request) {
         Node& cur_node = mutable_node(id);
         assert(cur_node.can_fit(request));
-
 
         cur_node.free.cores -= request.cores;
         cur_node.free.memory_mb -= request.memory_mb;
@@ -252,12 +250,9 @@ public:
         cur_node.free.cores += request.cores;
         cur_node.free.memory_mb += request.memory_mb;
         cur_node.running_jobs--;
-
     }
 
-    const Node& node(NodeId id) const {
-        return nodes_[static_cast<std::uint32_t>(id)];
-    }
+    const Node& node(NodeId id) const { return nodes_[static_cast<std::uint32_t>(id)]; }
 
     std::size_t size() const { return nodes_.size(); }
 
@@ -281,9 +276,9 @@ public:
         return free_sum;
     }
 
-    // Returns resources currently in use (utilized). 
+    // Returns resources currently in use (utilized).
     // Derived from total_capacity() and total_free()
-    Resources total_utilized() const { 
+    Resources total_utilized() const {
         Resources utilized{};
         const Resources free = total_free();
         const Resources total = total_capacity();
@@ -293,9 +288,7 @@ public:
     }
 
 private:
-    Node& mutable_node(NodeId id) {
-        return nodes_[static_cast<std::uint32_t>(id)];
-    }
+    Node& mutable_node(NodeId id) { return nodes_[static_cast<std::uint32_t>(id)]; }
 
     std::vector<Node> nodes_;
 };
@@ -320,7 +313,7 @@ public:
         std::uint64_t random = rng_();
         random >>= 11;
         random++;
-        return static_cast<double>(random)/kPow53;
+        return static_cast<double>(random) / kPow53;
     }
 
     // Exponentially distributed gap with the given mean, in Ticks. Returns 0
@@ -342,7 +335,7 @@ public:
     // Precondition: rate_per_second > 0.
     Tick next_interarrival(double rate_per_second) {
         assert(rate_per_second > 0.0);
-        return next_exponential((1/rate_per_second)* static_cast<double>(kSecond));
+        return next_exponential((1 / rate_per_second) * static_cast<double>(kSecond));
     }
 
     // Uniform integer in [0, n). Carries negligible modulo bias at the scales
@@ -437,8 +430,8 @@ static bool check_random_source() {
         const double cv = stddev / mean;
         expect(cv > 0.95 && cv < 1.05, "gap distribution is exponential (CV ~ 1)");
 
-        std::printf("    mean gap %.1f us (expected %.1f), CV %.3f (expected 1.0)\n",
-                    mean, expected_mean, cv);
+        std::printf("    mean gap %.1f us (expected %.1f), CV %.3f (expected 1.0)\n", mean,
+                    expected_mean, cv);
     }
 
     // next_below: in range, degenerate case, and roughly even coverage.
@@ -470,8 +463,7 @@ static bool check_random_source() {
         expect(one.next_below(1) == 0, "next_below(1) is always 0");
     }
 
-    std::printf("%s  random source: determinism, range, distribution\n",
-                ok ? "PASS" : "FAIL");
+    std::printf("%s  random source: determinism, range, distribution\n", ok ? "PASS" : "FAIL");
     return ok;
 }
 
@@ -514,16 +506,14 @@ public:
         jobs.reserve(count);
         Tick cur_tick{0};
 
-        for (std::uint32_t num = 0; num < count; num++){
+        for (std::uint32_t num = 0; num < count; num++) {
             const JobProfile& profile = kJobProfiles[rng_.next_below(std::size(kJobProfiles))];
             const Tick duration = rng_.next_exponential(static_cast<double>(profile.mean_duration));
             cur_tick += rng_.next_interarrival(arrival_rate_);
-            Job j{
-                .id = JobId{num},
-                .request = profile.request,
-                .duration = duration,
-                .submit_time = cur_tick
-            };
+            Job j{.id = JobId{num},
+                  .request = profile.request,
+                  .duration = duration,
+                  .submit_time = cur_tick};
             jobs.push_back(j);
         }
 
@@ -551,14 +541,13 @@ LoadFactor offered_load(const std::vector<Job>& jobs, const Cluster& cluster) {
 
     std::uint64_t job_cores_seconds = 0;
     std::uint64_t job_memory_seconds = 0;
-    for (const Job& job : jobs){
+    for (const Job& job : jobs) {
         job_cores_seconds += job.duration * job.request.cores;
         job_memory_seconds += job.duration * job.request.memory_mb;
     }
-    double core_load = static_cast<double>(job_cores_seconds) / 
-                        static_cast<double>(core_seconds);
-    double memory_load = static_cast<double>(job_memory_seconds) / 
-                        static_cast<double>(memory_seconds);
+    double core_load = static_cast<double>(job_cores_seconds) / static_cast<double>(core_seconds);
+    double memory_load =
+        static_cast<double>(job_memory_seconds) / static_cast<double>(memory_seconds);
 
     return {core_load, memory_load};
 }
@@ -612,8 +601,7 @@ static bool check_workload() {
             if (i > 0 && j.submit_time < jobs[i - 1].submit_time) {
                 times_sorted = false;
             }
-            if (j.state != JobState::Queued || j.start_time != kNever ||
-                j.finish_time != kNever) {
+            if (j.state != JobState::Queued || j.start_time != kNever || j.finish_time != kNever) {
                 fresh = false;
             }
             if (j.duration == 0 || j.request.cores == 0) {
@@ -628,20 +616,17 @@ static bool check_workload() {
 
     // Arrival rate calibration, read back off the submit times.
     {
-        const double span = static_cast<double>(jobs.back().submit_time -
-                                                jobs.front().submit_time);
+        const double span = static_cast<double>(jobs.back().submit_time - jobs.front().submit_time);
         const double mean_gap = span / static_cast<double>(jobs.size() - 1);
         const double expected_gap = static_cast<double>(kSecond) / kRate;
         expect(std::fabs(mean_gap - expected_gap) / expected_gap < 0.05,
                "mean arrival gap matches the configured rate");
-        std::printf("    mean arrival gap %.0f us (expected %.0f)\n", mean_gap,
-                    expected_gap);
+        std::printf("    mean arrival gap %.0f us (expected %.0f)\n", mean_gap, expected_gap);
     }
 
     // Every profile should show up across 20k uniform draws.
     {
-        constexpr std::size_t kProfileCount =
-            sizeof(kJobProfiles) / sizeof(kJobProfiles[0]);
+        constexpr std::size_t kProfileCount = sizeof(kJobProfiles) / sizeof(kJobProfiles[0]);
         std::vector<std::size_t> seen(kProfileCount, 0);
         for (const Job& j : jobs) {
             for (std::size_t p = 0; p < kProfileCount; ++p) {
@@ -679,21 +664,20 @@ static bool check_workload() {
         std::printf("    rho doubles with rate: ratio %.3f\n", ratio);
     }
 
-    std::printf("%s  workload: determinism, structure, rate, load factor\n",
-                ok ? "PASS" : "FAIL");
+    std::printf("%s  workload: determinism, structure, rate, load factor\n", ok ? "PASS" : "FAIL");
     return ok;
 }
 
 // Time-weighted integral of resources in use, Advanced at
 // every event, never sampled.
 struct UtilizationIntegral {
-    private:
+private:
     Tick last_checkin_ = 0;
     std::uint64_t core_ticks_ = 0;
     //potential overflow risk? maybe convert to gb or regular seconds?
     std::uint64_t memory_ticks_ = 0;
 
-    public:
+public:
     // Advances the integral to `now`, crediting the interval since the last
     // advance to `in_use`.
     // Precondition: now >= the last time advanced.
@@ -719,7 +703,8 @@ LoadFactor UtilizationIntegral::mean(Tick end, const Resources& capacity) const 
     assert(total_core_ticks_ > 0);
     assert(total_memory_ticks_ > 0);
     assert(end != kNever);
-    return LoadFactor{static_cast<double>(core_ticks_) / static_cast<double>(total_core_ticks_), 
+    return LoadFactor{
+        static_cast<double>(core_ticks_) / static_cast<double>(total_core_ticks_),
         static_cast<double>(memory_ticks_) / static_cast<double>(total_memory_ticks_)};
 }
 
@@ -775,21 +760,23 @@ private:
 std::string TraceWriter::to_jsonl(const Event& e) {
     std::string line = std::format(R"({{"t":{},"seq":{})", e.time, e.seq);
 
-    line += std::visit([](const auto& p) -> std::string {
-        using T = std::decay_t<decltype(p)>;
-        if constexpr (std::is_same_v<T, JobArrival>) {
-            return std::format(R"(,"ev":"JobArrival","job":{})",
-                               static_cast<std::uint32_t>(p.job));
-        } else if constexpr (std::is_same_v<T, JobFinish>) {
-            return std::format(R"(,"ev":"JobFinish","job":{},"node":{})",
-                               static_cast<std::uint32_t>(p.job),
-                               static_cast<std::uint32_t>(p.node));
-        } else if constexpr (std::is_same_v<T, SimEnd>) {
-            return R"(,"ev":"SimEnd")";
-        } else {
-            static_assert(kAlwaysFalse<T>, "Unhandled event type in trace writer");
-        }
-    }, e.payload);
+    line += std::visit(
+        [](const auto& p) -> std::string {
+            using T = std::decay_t<decltype(p)>;
+            if constexpr (std::is_same_v<T, JobArrival>) {
+                return std::format(R"(,"ev":"JobArrival","job":{})",
+                                   static_cast<std::uint32_t>(p.job));
+            } else if constexpr (std::is_same_v<T, JobFinish>) {
+                return std::format(R"(,"ev":"JobFinish","job":{},"node":{})",
+                                   static_cast<std::uint32_t>(p.job),
+                                   static_cast<std::uint32_t>(p.node));
+            } else if constexpr (std::is_same_v<T, SimEnd>) {
+                return R"(,"ev":"SimEnd")";
+            } else {
+                static_assert(kAlwaysFalse<T>, "Unhandled event type in trace writer");
+            }
+        },
+        e.payload);
 
     line += "}";
     return line;
@@ -820,8 +807,7 @@ Percentiles percentiles(std::vector<Tick>& values) {
     std::nth_element(begin, begin + i95, begin + i99);
     std::nth_element(begin, begin + i50, begin + i95);
 
-    return Percentiles{values[static_cast<std::size_t>(i50)],
-                       values[static_cast<std::size_t>(i95)],
+    return Percentiles{values[static_cast<std::size_t>(i50)], values[static_cast<std::size_t>(i95)],
                        values[static_cast<std::size_t>(i99)]};
 }
 
@@ -829,12 +815,12 @@ TraceWriter::TraceWriter(const Options& opt) {
     const char* path = opt.trace_path;
     if (path == nullptr) return;
     out_ = std::fopen(path, "w");
-    if (out_ == nullptr){
+    if (out_ == nullptr) {
         std::perror(path);
         return;
     }
     write_line(std::format(R"({{"ev":"header","seed":{},"nodes":{},"jobs":{},"arrival_rate":{}}})",
-         opt.seed, opt.nodes, opt.jobs, opt.arrival_rate));
+                           opt.seed, opt.nodes, opt.jobs, opt.arrival_rate));
 }
 
 // Every record goes through here, so the one-object-per-line invariant is
@@ -856,17 +842,15 @@ void TraceWriter::write(const Event& e) {
 
 void TraceWriter::job_spec(const Job& j) {
     if (out_ == nullptr) return;
-    write_line(std::format(
-        R"({{"ev":"job","job":{},"submit":{},"dur":{},"cores":{},"mem_mb":{}}})",
-        static_cast<std::uint32_t>(j.id), j.submit_time, j.duration,
-        j.request.cores, j.request.memory_mb));
+    write_line(std::format(R"({{"ev":"job","job":{},"submit":{},"dur":{},"cores":{},"mem_mb":{}}})",
+                           static_cast<std::uint32_t>(j.id), j.submit_time, j.duration,
+                           j.request.cores, j.request.memory_mb));
 }
 
 void TraceWriter::placement(Tick t, JobId job, NodeId node) {
     if (out_ == nullptr) return;
     write_line(std::format(R"({{"t":{},"ev":"JobStart","job":{},"node":{}}})", t,
-                           static_cast<std::uint32_t>(job),
-                           static_cast<std::uint32_t>(node)));
+                           static_cast<std::uint32_t>(job), static_cast<std::uint32_t>(node)));
 }
 
 // Drives the clock. Owns the jobs and the backlog; Cluster still never sees a
@@ -920,54 +904,50 @@ LoadFactor Simulator::mean_utilization() const {
 }
 
 void Simulator::run() {
-    for (const Job& j : jobs_){
+    for (const Job& j : jobs_) {
         queue_.schedule(j.submit_time, JobArrival{j.id});
         if (trace_ != nullptr) trace_->job_spec(j);
     }
 
-    while (!queue_.empty()){
+    while (!queue_.empty()) {
         bool should_end = false;
         Event e = queue_.pop();
         assert(e.time >= now_);
         now_ = e.time;
-        if (trace_ != nullptr){
+        if (trace_ != nullptr) {
             trace_->write(e);
         }
         util_.advance(now_, cluster_.total_utilized());
 
-        std::visit([this, &should_end](auto& payload){
+        std::visit(
+            [this, &should_end](auto& payload) {
+                using T = std::decay_t<decltype(payload)>;
 
-            using T = std::decay_t<decltype(payload)>;
+                if constexpr (std::is_same_v<T, JobArrival>) {
+                    this->on_arrival(payload);
+                } else if constexpr (std::is_same_v<T, JobFinish>) {
+                    this->on_finish(payload);
+                } else if constexpr (std::is_same_v<T, SimEnd>) {
+                    this->on_sim_end(payload);
+                    should_end = true;
+                } else {
+                    static_assert(kAlwaysFalse<T>, "Unhandled Event Type in Visitor");
+                }
+            },
+            e.payload);
 
-            if constexpr(std::is_same_v<T, JobArrival>){
-                this->on_arrival(payload);
-            }
-            else if constexpr (std::is_same_v<T, JobFinish>){
-                this->on_finish(payload);
-            }
-            else if constexpr (std::is_same_v<T, SimEnd>){
-                this->on_sim_end(payload);
-                should_end = true;
-            }
-            else{
-                static_assert(kAlwaysFalse<T>, "Unhandled Event Type in Visitor");
-            }
-            }, e.payload);
-
-        if (should_end){
+        if (should_end) {
             break;
         }
 
-        if (queue_.empty()){
+        if (queue_.empty()) {
             queue_.schedule(now_, SimEnd{});
         }
     }
-
-
 }
 
 void Simulator::drain() {
-    while (!pending_.empty()){
+    while (!pending_.empty()) {
         JobId next_job_id = pending_.front();
         Job& next_job = job(next_job_id);
         auto res = cluster_.first_fit(next_job.request);
@@ -989,10 +969,10 @@ void Simulator::on_arrival(const JobArrival& arrival) {
     drain();
 }
 
-void Simulator::on_sim_end(const SimEnd& end){
+void Simulator::on_sim_end(const SimEnd& end) {
     util_.advance(now_, cluster_.total_utilized());
     sim_end_ = now_;
-    (void) end;
+    (void)end;
 }
 
 void Simulator::on_finish(const JobFinish& finish) {
@@ -1004,7 +984,6 @@ void Simulator::on_finish(const JobFinish& finish) {
     this_job.state = JobState::Done;
     drain();
 }
-
 
 static bool check_simulator() {
     bool ok = true;
@@ -1128,8 +1107,7 @@ static bool check_simulator() {
         expect(queued_time > 0, "some job waits at rho 0.67");
         if (started > 0) {
             std::printf("    mean queue time %.3fs over %zu started jobs\n",
-                        static_cast<double>(queued_time) /
-                            static_cast<double>(started) / 1e6,
+                        static_cast<double>(queued_time) / static_cast<double>(started) / 1e6,
                         started);
         }
     }
@@ -1145,11 +1123,11 @@ static bool check_event_queue() {
     // Scheduled out of order, with a three-way tie at t=1s. Trailing comments
     // are the sequence number each call consumes.
     q.schedule(500 * kMillisecond, JobArrival{JobId{1}});     // seq 0
-    q.schedule(2 * kSecond, JobFinish{JobId{1}, NodeId{0}});   // seq 1
-    q.schedule(1 * kSecond, JobArrival{JobId{2}});             // seq 2
-    q.schedule(1 * kSecond, JobArrival{JobId{3}});             // seq 3
-    q.schedule(1 * kSecond, JobArrival{JobId{4}});             // seq 4
-    q.schedule(10 * kSecond, SimEnd{});                        // seq 5
+    q.schedule(2 * kSecond, JobFinish{JobId{1}, NodeId{0}});  // seq 1
+    q.schedule(1 * kSecond, JobArrival{JobId{2}});            // seq 2
+    q.schedule(1 * kSecond, JobArrival{JobId{3}});            // seq 3
+    q.schedule(1 * kSecond, JobArrival{JobId{4}});            // seq 4
+    q.schedule(10 * kSecond, SimEnd{});                       // seq 5
 
     // Time ordering pulls seq 1 behind the three events at t=1s, which the
     // tie-break then holds in scheduling order.
@@ -1157,8 +1135,7 @@ static bool check_event_queue() {
     constexpr std::size_t kExpectedCount = 6;
 
     if (q.size() != kExpectedCount) {
-        std::printf("FAIL  expected %zu events queued, found %zu\n",
-                    kExpectedCount, q.size());
+        std::printf("FAIL  expected %zu events queued, found %zu\n", kExpectedCount, q.size());
         return false;
     }
 
@@ -1168,10 +1145,8 @@ static bool check_event_queue() {
     for (std::size_t i = 0; i < kExpectedCount; ++i) {
         const Event e = q.pop();
 
-        std::printf("  t=%8.3fs  seq=%llu  %-10s",
-                    static_cast<double>(e.time) / 1e6,
-                    static_cast<unsigned long long>(e.seq),
-                    kEventNames[e.payload.index()]);
+        std::printf("  t=%8.3fs  seq=%llu  %-10s", static_cast<double>(e.time) / 1e6,
+                    static_cast<unsigned long long>(e.seq), kEventNames[e.payload.index()]);
 
         if (e.seq != expected_seq[i]) {
             std::printf("   <-- expected seq=%llu",
@@ -1208,8 +1183,7 @@ static bool check_cluster() {
     Cluster c(4u, kPerNode);
 
     expect(c.size() == 4u, "cluster has 4 nodes");
-    expect(c.total_capacity() == Resources{32u, 65'536u},
-           "total capacity is 4x per-node");
+    expect(c.total_capacity() == Resources{32u, 65'536u}, "total capacity is 4x per-node");
     expect(c.total_free() == c.total_capacity(), "a fresh cluster is fully free");
 
     // Dimensions are independent: a request can fail on memory alone.
@@ -1230,12 +1204,10 @@ static bool check_cluster() {
         }
         expect(*placed == NodeId{i}, "first_fit returns the lowest free index");
         c.allocate(*placed, kWholeNode);
-        expect(c.node(*placed).running_jobs == 1u,
-               "allocate counts a running job");
+        expect(c.node(*placed).running_jobs == 1u, "allocate counts a running job");
     }
 
-    expect(!c.first_fit(Resources{1u, 1u}).has_value(),
-           "a full cluster places nothing");
+    expect(!c.first_fit(Resources{1u, 1u}).has_value(), "a full cluster places nothing");
     expect(c.total_free() == Resources{}, "a full cluster has no free resources");
 
     // The leak check. Releasing everything must restore the starting state
@@ -1243,12 +1215,10 @@ static bool check_cluster() {
     for (std::uint32_t i = 0; i < 4u; ++i) {
         c.release(NodeId{i}, kWholeNode);
     }
-    expect(c.total_free() == c.total_capacity(),
-           "release restores the cluster exactly");
+    expect(c.total_free() == c.total_capacity(), "release restores the cluster exactly");
     expect(c.node(NodeId{0}).running_jobs == 0u, "release clears the job count");
 
-    std::printf("%s  cluster model: fit, placement, allocate/release\n",
-                ok ? "PASS" : "FAIL");
+    std::printf("%s  cluster model: fit, placement, allocate/release\n", ok ? "PASS" : "FAIL");
     return ok;
 }
 
@@ -1338,9 +1308,12 @@ ParsedArgs parse_args(int argc, char** argv) {
     // then divides by zero in the utilization denominator, and a zero rate
     // trips an assert inside WorkloadGenerator rather than printing usage.
     const char* problem = nullptr;
-    if (opts.nodes == 0) problem = "--nodes must be at least 1";
-    else if (opts.jobs == 0) problem = "--jobs must be at least 1";
-    else if (!(opts.arrival_rate > 0.0)) problem = "--rate must be positive";
+    if (opts.nodes == 0)
+        problem = "--nodes must be at least 1";
+    else if (opts.jobs == 0)
+        problem = "--jobs must be at least 1";
+    else if (!(opts.arrival_rate > 0.0))
+        problem = "--rate must be positive";
     if (problem != nullptr) {
         std::fprintf(stderr, "%s: %s\n", program, problem);
         return ParsedArgs{ParsedArgs::Status::Error, {}};
@@ -1349,23 +1322,19 @@ ParsedArgs parse_args(int argc, char** argv) {
     return ParsedArgs{ParsedArgs::Status::Run, opts};
 }
 
-static double seconds(Tick t) {
-    return static_cast<double>(t) / static_cast<double>(kSecond);
-}
+static double seconds(Tick t) { return static_cast<double>(t) / static_cast<double>(kSecond); }
 
 // Takes the sample by value because percentiles() reorders what it is given:
 // the copy makes that explicit at the call site rather than surprising a
 // caller who still wanted the original order.
 static void report_sample(const char* label, TimeSample sample) {
     if (sample.times.empty()) {
-        std::printf("  %-12s  no samples        (%zu censored)\n", label,
-                    sample.skipped);
+        std::printf("  %-12s  no samples        (%zu censored)\n", label, sample.skipped);
         return;
     }
     const Percentiles p = percentiles(sample.times);
-    std::printf("  %-12s  p50 %8.1fs  p95 %8.1fs  p99 %8.1fs  (%zu censored)\n",
-                label, seconds(p.p50), seconds(p.p95), seconds(p.p99),
-                sample.skipped);
+    std::printf("  %-12s  p50 %8.1fs  p95 %8.1fs  p99 %8.1fs  (%zu censored)\n", label,
+                seconds(p.p50), seconds(p.p95), seconds(p.p99), sample.skipped);
 }
 
 // Human-readable summary of a finished run. Ticks become seconds only here;
@@ -1376,8 +1345,8 @@ void report(const Simulator& sim, const Options& opts) {
     const LoadFactor util = sim.mean_utilization();
 
     std::printf("run: seed %llu  nodes %u  jobs %u  rate %g/s\n",
-                static_cast<unsigned long long>(opts.seed), opts.nodes,
-                opts.jobs, opts.arrival_rate);
+                static_cast<unsigned long long>(opts.seed), opts.nodes, opts.jobs,
+                opts.arrival_rate);
     std::printf("  span          %12.1fs\n", seconds(sim.now()));
     std::printf("  offered rho   cores %.4f  memory %.4f\n", rho.cores, rho.memory);
     std::printf("  utilization   cores %.4f  memory %.4f\n", util.cores, util.memory);
@@ -1433,8 +1402,8 @@ static bool check_metrics() {
                "core integral equals the workload's core-time");
         expect(std::fabs(got.memory - expected_memory) < 1e-9 * expected_memory,
                "memory integral equals the workload's memory-time");
-        std::printf("    unqueued run: util cores %.6f (expected %.6f)\n",
-                    got.cores, expected_cores);
+        std::printf("    unqueued run: util cores %.6f (expected %.6f)\n", got.cores,
+                    expected_cores);
     }
 
     // Mean rather than a percentile: at these cluster sizes the median queue
@@ -1448,8 +1417,7 @@ static bool check_metrics() {
         assert(sample.skipped == 0);  // censored waits would not be comparable
         Tick total = 0;
         for (Tick t : sample.times) total += t;
-        return static_cast<double>(total) /
-               static_cast<double>(sample.times.size()) / 1e6;
+        return static_cast<double>(total) / static_cast<double>(sample.times.size()) / 1e6;
     };
 
     // Capacity relieves queueing. A metric that moves the wrong way here is
@@ -1458,8 +1426,7 @@ static bool check_metrics() {
         const double small = mean_queue_wait(8u, kRate);
         const double large = mean_queue_wait(16u, kRate);
         expect(large < small, "more nodes lowers mean queue time");
-        std::printf("    queue wait: 8 nodes %.1fs -> 16 nodes %.1fs\n", small,
-                    large);
+        std::printf("    queue wait: 8 nodes %.1fs -> 16 nodes %.1fs\n", small, large);
     }
 
     // Queueing must grow faster than load does. Three equally spaced rates:
@@ -1479,8 +1446,7 @@ static bool check_metrics() {
     // The third acceptance check, identical output across -O0 and -O2, needs
     // two binaries and so cannot live here: see `make check-determinism`.
 
-    std::printf("%s  metrics: utilization integral, queueing response\n",
-                ok ? "PASS" : "FAIL");
+    std::printf("%s  metrics: utilization integral, queueing response\n", ok ? "PASS" : "FAIL");
     return ok;
 }
 
@@ -1491,7 +1457,7 @@ int main(int argc, char** argv) {
 
     // Arguments mean "run the simulation"; bare `atlas` runs the self-checks,
     // which is what `make run` relies on.
-    if (argc > 1){
+    if (argc > 1) {
         const Options opt = parsed.options;
         Cluster main_cluster = Cluster{opt.nodes, kDefaultResources};
         WorkloadGenerator work_gen = WorkloadGenerator(opt.seed, opt.arrival_rate);
@@ -1510,8 +1476,6 @@ int main(int argc, char** argv) {
     const bool workload_ok = check_workload();
     const bool simulator_ok = check_simulator();
     const bool metrics_ok = check_metrics();
-    return (queue_ok && cluster_ok && random_ok && workload_ok && simulator_ok &&
-            metrics_ok)
-               ? 0
-               : 1;
+    return (queue_ok && cluster_ok && random_ok && workload_ok && simulator_ok && metrics_ok) ? 0
+                                                                                              : 1;
 }

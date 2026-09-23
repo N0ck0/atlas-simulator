@@ -15,7 +15,8 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
 
 ## Current state
 
-- **Stage:** S1 complete (steps 1.1-1.5). S2 in progress: step 2.1 (CMake) done.
+- **Stage:** S1 complete (steps 1.1-1.5). S2 in progress: 2.1 (CMake) and 2.2
+  (clang-format) done.
 - **What exists:** everything is in `src/atlas.cpp` (~1,520 lines, one translation
   unit) — `Tick` and strong `JobId`/`NodeId`; variant event payloads and
   `EventQueue`; `Resources`/`Node`/`Job`/`Cluster` with first-fit placement;
@@ -55,7 +56,7 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
 
 ### Next: S2, CMake and real tests
 
-CMake and presets are in place (2.1). Still ahead: `.clang-format` (2.2), splitting the
+CMake and presets (2.1) and `.clang-format` (2.2) are in place. Still ahead: splitting the
 single translation unit into fine-grained headers under a flat `namespace atlas` with a
 `libatlas` static library and a thin CLI (2.3), GoogleTest via `FetchContent` (2.4), moving
 the six `check_*()` functions into test cases (2.5), turning `check-determinism` into a
@@ -113,7 +114,10 @@ it should move into the relevant header as S2 splits the file.
 - Strong ID types (`enum class JobId : std::uint32_t`), never bare ints or pointers.
 - `PascalCase` types, `snake_case` functions and variables, `trailing_underscore_`
   private members, `kPascalCase` constants.
-- `.clang-format` arrives in S2.
+- `.clang-format` is Google style with four deviations: 4-space indent, 100-column
+  limit, left-aligned `*` and `&`, and no comment reflow. `make fmt` formats the tree,
+  `make fmt-check` reports without editing. clang-format output differs between major
+  versions, so CI pins 18 to match local.
 
 ### Comments
 
@@ -150,6 +154,8 @@ make sim                # build, then run one simulation and report;
                         # override any parameter: make sim NODES=16 RATE=0.035
 make test               # ctest; registers no cases until step 2.4
 make determinism        # identical trace across -O0 and -O2
+make fmt                # reformat all sources with clang-format
+make fmt-check          # report unformatted files without editing
 make clean              # delete build/ and trace.jsonl
 make help               # the above, from the shell
 ```

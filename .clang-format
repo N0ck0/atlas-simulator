@@ -1,0 +1,35 @@
+# Google style, with the four deviations needed to match the code as written.
+# Every other option is inherited deliberately: a short config is one you can
+# still reason about, and Google's defaults are the ones most C++ you read
+# online already follows.
+Language: Cpp
+BasedOnStyle: Google
+
+# Google indents 2; this code has always indented 4. AccessModifierOffset must
+# scale with it, or `public:` lands 3 spaces off the class body instead of flush
+# against the class keyword.
+IndentWidth: 4
+AccessModifierOffset: -4
+
+# Google's 80 leaves too little after a 4-space indent three levels deep, where
+# `const std::vector<Job>&` alone is 24 characters. Measured against the code as
+# written, 80 would re-wrap 41 lines and 100 re-wraps one.
+ColumnLimit: 100
+
+# `char* p` and `Job& j`, which is what every one of the 78 declarations in the
+# code already does. DerivePointerAlignment must be off: Google enables it, and
+# it makes clang-format infer the alignment per file and ignore these settings.
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Lets clang-format parse C++20 constructs rather than guessing the dialect.
+Standard: c++20
+
+# Comments here are prose that carries design reasoning, and clang-format
+# reflows them badly: on a first pass it wrapped an over-long line and glued the
+# overflow onto the next sentence, producing "...don't appear returned / vector
+# Silently dropping skipped jobs...". Formatters are good at code and bad at
+# prose, and the damage is silent. Leading `//` spacing and trailing whitespace
+# are still normalized; only the line breaks inside a comment are left alone.
+ReflowComments: false

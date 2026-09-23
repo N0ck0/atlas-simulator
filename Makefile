@@ -66,6 +66,19 @@ test: debug
 determinism: build/debug/CMakeCache.txt
 	cmake --build --preset debug --target check-determinism
 
+# Reformats every tracked C/C++ source in place, using the rules in
+# .clang-format. Safe to run at any time: clang-format changes whitespace and
+# include order only.
+fmt:
+	git ls-files '*.cpp' '*.hpp' | xargs clang-format -i
+
+# Reports which files are not formatted correctly, without editing anything,
+# and exits non-zero if any are. This is what CI runs from step 2.7. Note that
+# clang-format output varies between major versions, so CI pins the same
+# version installed here (18).
+fmt-check:
+	git ls-files '*.cpp' '*.hpp' | xargs clang-format --dry-run --Werror
+
 # Deletes every generated file. All build output lives under build/, so this is
 # a complete reset; the next build reconfigures from scratch. trace.jsonl goes
 # too, being the default --trace output of `make sim`.
@@ -86,9 +99,11 @@ help:
 	@printf '\n'
 	@printf '  make test       ctest (registers no cases until step 2.4)\n'
 	@printf '  make determinism  identical trace across -O0 and -O2\n'
+	@printf '  make fmt        reformat all sources with clang-format\n'
+	@printf '  make fmt-check  report unformatted files without editing\n'
 	@printf '  make clean      delete build/ and trace.jsonl\n'
 	@printf '\n'
 	@printf 'The underlying commands, if you prefer them directly:\n'
 	@printf '  cmake --preset debug && cmake --build --preset debug\n'
 
-.PHONY: debug release asan run run-asan sim test determinism clean help
+.PHONY: debug release asan run run-asan sim test determinism fmt fmt-check clean help
