@@ -22,6 +22,8 @@
 #include <limits>
 #include <optional>
 #include <type_traits>
+#include <algorithm>
+#include <format>
 
 // Simulated time in microseconds. Integer rather than floating point so that
 // arithmetic stays exact and results are identical across optimization levels.
@@ -152,6 +154,27 @@ struct Job {
     bool operator==(const Job&) const = default;
 };
 
+struct TimeSample {
+    std::size_t skipped;
+    std::vector<Tick> times;
+};
+
+// Records the turnaround times of each job
+// Includes amount of jobs that didn't finish in skipped, unfinished jobs don't appear returned vector
+// Silently dropping skipped jobs would bias times downward without explanation
+TimeSample turnaround_times(const std::vector<Job>& jobs){
+    std::vector<Tick> res;
+    std::size_t skipped_jobs = 0;
+    for (const Job& job : jobs){
+        if (job.state != JobState::Done){
+            skipped_jobs++;
+            continue;
+        }
+        res.push_back(job.finish_time - job.submit_time);
+    }
+    return TimeSample{skipped_jobs, std::move(res)};
+}
+
 // The machines and the resource accounting over them. Owns no jobs; the
 // simulator holds those and passes a Resources request in by value.
 class Cluster {
@@ -227,6 +250,17 @@ public:
             free_sum.memory_mb += n.free.memory_mb;
         }
         return free_sum;
+    }
+
+    // Returns resources currently in use (utilized). 
+    // Derived from total_capacity() and total_free()
+    Resources total_utilized() const { 
+        Resources utilized{};
+        const Resources free = total_free();
+        const Resources total = total_capacity();
+        utilized.cores = total.cores - free.cores;
+        utilized.memory_mb = total.memory_mb - free.memory_mb;
+        return utilized;
     }
 
 private:
@@ -620,6 +654,185 @@ static bool check_workload() {
     return ok;
 }
 
+// Time-weighted integral of resources in use, Advanced at
+// every event, never sampled.
+struct UtilizationIntegral {
+    private:
+    Tick last_checkin_ = 0;
+    std::uint64_t core_ticks_ = 0;
+    //potential overflow risk? maybe convert to gb or regular seconds?
+    std::uint64_t memory_ticks_ = 0;
+
+    public:
+    // Advances the integral to `now`, crediting the interval since the last
+    // advance to `in_use`.
+    // Precondition: now >= the last time advanced.
+    void advance(Tick now, const Resources& in_use);
+
+    // Mean fraction of `capacity` in use over [0, end], per dimension.
+    LoadFactor mean(Tick end, const Resources& capacity) const;
+};
+
+void UtilizationIntegral::advance(Tick now, const Resources& in_use) {
+    assert(now >= last_checkin_);
+    if (now == last_checkin_) return;
+    Tick interval = now - last_checkin_;
+    core_ticks_ += interval * in_use.cores;
+    memory_ticks_ += interval * in_use.memory_mb;
+    last_checkin_ = now;
+}
+
+LoadFactor UtilizationIntegral::mean(Tick end, const Resources& capacity) const {
+    assert(end > 0);
+    std::uint64_t total_core_ticks_ = end * capacity.cores;
+    std::uint64_t total_memory_ticks_ = end * capacity.memory_mb;
+    assert(total_core_ticks_ > 0);
+    assert(total_memory_ticks_ > 0);
+    assert(end != kNever);
+    return LoadFactor{static_cast<double>(core_ticks_) / static_cast<double>(total_core_ticks_), 
+        static_cast<double>(memory_ticks_) / static_cast<double>(total_memory_ticks_)};
+}
+
+struct Percentiles {
+    Tick p50 = 0;
+    Tick p95 = 0;
+    Tick p99 = 0;
+};
+
+// Order statistics of `values`, which is REORDERED IN PLACE: pass a copy if
+// the original order still matters.
+//
+// Nearest-rank convention: the pth percentile is the smallest value at or
+// above which p percent of the sample lies, at index ceil(p*n/100) - 1. So
+// p99 of 100 samples is the 99th, not the largest. Every cross-scheduler
+// comparison from S3 on depends on this convention staying fixed.
+// Precondition: values is non-empty.
+Percentiles percentiles(std::vector<Tick>& values);
+
+// JSONL event trace: one JSON object per line, so a run can be streamed,
+// tailed, and diffed. Writes nothing when constructed with a null path.
+class TraceWriter {
+public:
+    TraceWriter(const char* path, std::uint64_t seed);
+    ~TraceWriter();
+    TraceWriter(const TraceWriter&) = delete;
+    const TraceWriter& operator=(TraceWriter&) = delete;
+
+    void write(const Event& e);
+
+    // A job's static properties, logged once before the clock starts so that
+    // analysis can group by job size without replaying the seed.
+    void job_spec(const Job& j);
+
+    // Placement is not an event: drain() assigns a job to a node as a side
+    // effect of handling an arrival or a finish, so nothing reaches write().
+    // Logging it here is what lets the trace separate queue wait from service
+    // time. These records carry no seq -- they never entered the queue -- so
+    // file order, not the seq field, is what orders a tick's lines.
+    void placement(Tick t, JobId job, NodeId node);
+
+private:
+    static std::string to_jsonl(const Event& e);
+    void write_line(const std::string& line);
+
+    std::FILE* out_ = nullptr;
+};
+
+std::string TraceWriter::to_jsonl(const Event& e) {
+    std::string line = std::format(R"({{"t":{},"seq":{})", e.time, e.seq);
+
+    line += std::visit([](const auto& p) -> std::string {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, JobArrival>) {
+            return std::format(R"(,"ev":"JobArrival","job":{})",
+                               static_cast<std::uint32_t>(p.job));
+        } else if constexpr (std::is_same_v<T, JobFinish>) {
+            return std::format(R"(,"ev":"JobFinish","job":{},"node":{})",
+                               static_cast<std::uint32_t>(p.job),
+                               static_cast<std::uint32_t>(p.node));
+        } else if constexpr (std::is_same_v<T, SimEnd>) {
+            return R"(,"ev":"SimEnd")";
+        } else {
+            static_assert(kAlwaysFalse<T>, "Unhandled event type in trace writer");
+        }
+    }, e.payload);
+
+    line += "}";
+    return line;
+}
+
+// Index of the pth percentile under the nearest-rank convention.
+// Precondition: n > 0 and 0 < p <= 100.
+static std::ptrdiff_t percentile_rank(std::size_t n, std::size_t p) {
+    assert(n > 0 && p > 0 && p <= 100);
+    const std::size_t index = (n * p + 99) / 100 - 1;  // ceil(n*p/100) - 1
+    return static_cast<std::ptrdiff_t>(index);
+}
+
+Percentiles percentiles(std::vector<Tick>& values) {
+    assert(!values.empty());
+
+    const std::size_t n = values.size();
+    const std::ptrdiff_t i50 = percentile_rank(n, 50);
+    const std::ptrdiff_t i95 = percentile_rank(n, 95);
+    const std::ptrdiff_t i99 = percentile_rank(n, 99);
+
+    // Descending order, each call restricted to the prefix the previous one
+    // already isolated: nth_element leaves everything below its pivot on the
+    // left, so the smaller quantiles cannot have moved out of that prefix.
+    // Three full-range calls would also be correct, just more work.
+    const auto begin = values.begin();
+    std::nth_element(begin, begin + i99, values.end());
+    std::nth_element(begin, begin + i95, begin + i99);
+    std::nth_element(begin, begin + i50, begin + i95);
+
+    return Percentiles{values[static_cast<std::size_t>(i50)],
+                       values[static_cast<std::size_t>(i95)],
+                       values[static_cast<std::size_t>(i99)]};
+}
+
+TraceWriter::TraceWriter(const char* path, std::uint64_t seed) {
+    if (path == nullptr) return;
+    out_ = std::fopen(path, "w");
+    if (out_ == nullptr){
+        std::perror(path);
+        return;
+    }
+    write_line(std::format(R"({{"ev":"header","seed":{}}})", seed));
+}
+
+// Every record goes through here, so the one-object-per-line invariant is
+// enforced in a single place rather than at each call site.
+void TraceWriter::write_line(const std::string& line) {
+    if (out_ == nullptr) return;
+    std::fputs(line.c_str(), out_);
+    std::fputs("\n", out_);
+}
+
+TraceWriter::~TraceWriter() {
+    if (out_ != nullptr) std::fclose(out_);
+}
+
+void TraceWriter::write(const Event& e) {
+    if (out_ == nullptr) return;
+    write_line(to_jsonl(e));
+}
+
+void TraceWriter::job_spec(const Job& j) {
+    if (out_ == nullptr) return;
+    write_line(std::format(
+        R"({{"ev":"job","job":{},"submit":{},"dur":{},"cores":{},"mem_mb":{}}})",
+        static_cast<std::uint32_t>(j.id), j.submit_time, j.duration,
+        j.request.cores, j.request.memory_mb));
+}
+
+void TraceWriter::placement(Tick t, JobId job, NodeId node) {
+    if (out_ == nullptr) return;
+    write_line(std::format(R"({{"t":{},"ev":"JobStart","job":{},"node":{}}})", t,
+                           static_cast<std::uint32_t>(job),
+                           static_cast<std::uint32_t>(node)));
+}
+
 // Drives the clock. Owns the jobs and the backlog; Cluster still never sees a
 // Job, only a Resources request.
 //
@@ -629,7 +842,7 @@ class Simulator {
 public:
     // `jobs` must have dense ids matching its indices, as WorkloadGenerator
     // produces: jobs_[5] is JobId{5}.
-    Simulator(Cluster cluster, std::vector<Job> jobs);
+    Simulator(Cluster cluster, std::vector<Job> jobs, TraceWriter* trace = nullptr);
 
     // Seeds the queue and runs it to exhaustion. Call once.
     void run();
@@ -639,12 +852,16 @@ public:
     const Cluster& cluster() const { return cluster_; }
     std::size_t pending_count() const { return pending_.size(); }
 
+    // Valid only after run() has returned.
+    LoadFactor mean_utilization() const;
+
 private:
     // The one and only placement site. Nothing else calls Cluster::allocate.
     void drain();
 
     void on_arrival(const JobArrival& arrival);
     void on_finish(const JobFinish& finish);
+    void on_sim_end(const SimEnd& end);
 
     Job& job(JobId id) { return jobs_[static_cast<std::uint32_t>(id)]; }
 
@@ -653,23 +870,36 @@ private:
     std::deque<JobId> pending_;
     EventQueue queue_;
     Tick now_ = 0;
+    UtilizationIntegral util_;
+    Tick sim_end_ = kNever;
+    TraceWriter* trace_ = nullptr;
 };
 
-Simulator::Simulator(Cluster cluster, std::vector<Job> jobs)
-    : cluster_(std::move(cluster)), jobs_(std::move(jobs)) {}
+Simulator::Simulator(Cluster cluster, std::vector<Job> jobs, TraceWriter* trace)
+    : cluster_(std::move(cluster)), jobs_(std::move(jobs)), trace_(trace) {}
+
+LoadFactor Simulator::mean_utilization() const {
+    assert(sim_end_ < kNever);
+    return util_.mean(sim_end_, cluster_.total_capacity());
+}
 
 void Simulator::run() {
     for (const Job& j : jobs_){
         queue_.schedule(j.submit_time, JobArrival{j.id});
+        if (trace_ != nullptr) trace_->job_spec(j);
     }
-    //queue_.schedule(LARGE_TIME, SimEnd{});
 
     while (!queue_.empty()){
+        bool should_end = false;
         Event e = queue_.pop();
         assert(e.time >= now_);
         now_ = e.time;
+        if (trace_ != nullptr){
+            trace_->write(e);
+        }
+        util_.advance(now_, cluster_.total_utilized());
 
-        std::visit([this](auto& payload){
+        std::visit([this, &should_end](auto& payload){
 
             using T = std::decay_t<decltype(payload)>;
 
@@ -680,12 +910,21 @@ void Simulator::run() {
                 this->on_finish(payload);
             }
             else if constexpr (std::is_same_v<T, SimEnd>){
-                //placeholder for now
+                this->on_sim_end(payload);
+                should_end = true;
             }
             else{
                 static_assert(kAlwaysFalse<T>, "Unhandled Event Type in Visitor");
             }
             }, e.payload);
+
+        if (should_end){
+            break;
+        }
+
+        if (queue_.empty()){
+            queue_.schedule(now_, SimEnd{});
+        }
     }
 
 
@@ -703,6 +942,7 @@ void Simulator::drain() {
         next_job.state = JobState::Running;
         next_job.start_time = now_;
         next_job.node = res.value();
+        if (trace_ != nullptr) trace_->placement(now_, next_job.id, next_job.node);
         pending_.pop_front();
         queue_.schedule(now_ + next_job.duration, JobFinish{next_job.id, next_job.node});
     }
@@ -711,6 +951,12 @@ void Simulator::drain() {
 void Simulator::on_arrival(const JobArrival& arrival) {
     pending_.push_back(arrival.job);
     drain();
+}
+
+void Simulator::on_sim_end(const SimEnd& end){
+    util_.advance(now_, cluster_.total_utilized());
+    sim_end_ = now_;
+    (void) end;
 }
 
 void Simulator::on_finish(const JobFinish& finish) {
@@ -722,6 +968,7 @@ void Simulator::on_finish(const JobFinish& finish) {
     this_job.state = JobState::Done;
     drain();
 }
+
 
 static bool check_simulator() {
     bool ok = true;
@@ -969,11 +1216,98 @@ static bool check_cluster() {
     return ok;
 }
 
-int main() {
+// Run parameters, all overridable from the command line so that rho can be
+// swept without a recompile.
+struct Options {
+    std::uint64_t seed = 7;
+    std::uint32_t nodes = 8;
+    std::uint32_t jobs = 2'000;
+    double arrival_rate = 0.025;  // jobs per second
+    const char* trace_path = nullptr;
+};
+
+// nullopt on a bad argument, after printing usage.
+std::optional<Options> parse_args(int argc, char** argv);
+
+std::optional<Options> parse_args(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    return Options{};  // TODO
+}
+
+static bool check_metrics() {
+    bool ok = true;
+    auto expect = [&ok](bool cond, const char* what) {
+        if (!cond) {
+            std::printf("  FAIL  %s\n", what);
+            ok = false;
+        }
+    };
+
+    constexpr std::uint64_t kSeed = 7;
+    constexpr std::uint32_t kCount = 2'000;
+    constexpr double kRate = 0.025;
+    constexpr Resources kPerNode{16u, 65'536u};
+
+    WorkloadGenerator gen(kSeed, kRate);
+    const std::vector<Job> workload = gen.generate(kCount);
+
+    // A cluster with a node per job queues nothing, so each job holds its
+    // resources for exactly its duration and the integral collapses to a sum
+    // over the workload. That sum is computed here from the job list alone,
+    // without replaying the event loop, which is what makes this a check on
+    // the accumulation rather than a restatement of it.
+    {
+        Simulator roomy(Cluster(kCount, kPerNode), workload);
+        roomy.run();
+
+        std::uint64_t core_ticks = 0;
+        std::uint64_t memory_ticks = 0;
+        for (const Job& j : workload) {
+            core_ticks += j.duration * j.request.cores;
+            memory_ticks += j.duration * j.request.memory_mb;
+        }
+
+        const Resources cap = roomy.cluster().total_capacity();
+        const double span = static_cast<double>(roomy.now());
+        const double expected_cores =
+            static_cast<double>(core_ticks) / (span * static_cast<double>(cap.cores));
+        const double expected_memory =
+            static_cast<double>(memory_ticks) / (span * static_cast<double>(cap.memory_mb));
+
+        const LoadFactor got = roomy.mean_utilization();
+
+        // Both sides are exact integer sums turned into doubles by a single
+        // division, so the only slack needed is floating-point rounding.
+        expect(std::fabs(got.cores - expected_cores) < 1e-9 * expected_cores,
+               "core integral equals the workload's core-time");
+        expect(std::fabs(got.memory - expected_memory) < 1e-9 * expected_memory,
+               "memory integral equals the workload's memory-time");
+        std::printf("    unqueued run: util cores %.6f (expected %.6f)\n",
+                    got.cores, expected_cores);
+    }
+
+    // TODO(nick): remaining 1.5 acceptance checks -- identical output hash
+    // across -O0 and -O2, more nodes lowering mean queue time, and queueing
+    // exploding as rho approaches 1. Percentiles and the trace are still
+    // unimplemented.
+
+    std::printf("%s  metrics: utilization integral\n", ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+int main(int argc, char** argv) {
+    const std::optional<Options> opts = parse_args(argc, argv);
+    if (!opts) return 2;
+
     const bool queue_ok = check_event_queue();
     const bool cluster_ok = check_cluster();
     const bool random_ok = check_random_source();
     const bool workload_ok = check_workload();
     const bool simulator_ok = check_simulator();
-    return (queue_ok && cluster_ok && random_ok && workload_ok && simulator_ok) ? 0 : 1;
+    const bool metrics_ok = check_metrics();
+    return (queue_ok && cluster_ok && random_ok && workload_ok && simulator_ok &&
+            metrics_ok)
+               ? 0
+               : 1;
 }
