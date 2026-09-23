@@ -15,14 +15,15 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
 
 ## Current state
 
-- **Stage:** S1 complete (steps 1.1-1.5). S2 is next.
+- **Stage:** S1 complete (steps 1.1-1.5). S2 in progress: step 2.1 (CMake) done.
 - **What exists:** everything is in `src/atlas.cpp` (~1,520 lines, one translation
   unit) — `Tick` and strong `JobId`/`NodeId`; variant event payloads and
   `EventQueue`; `Resources`/`Node`/`Job`/`Cluster` with first-fit placement;
   `RandomSource`, `WorkloadGenerator`, and `offered_load`; `Simulator`, which runs
   them; and the reporting layer from 1.5 — `UtilizationIntegral`, `percentiles`,
   `turnaround_times`/`queue_wait_times`, `TraceWriter`, `Options`/`parse_args`,
-  and `report`. Built with `make`. CMake replaces the Makefile in S2.
+  and `report`. Built with CMake + presets, with a `Makefile` wrapper for the common
+  commands; the split into headers is still ahead.
 - **A run reports.** `SimEnd` is scheduled at `now_` once the queue drains, and its
   handler closes the utilization integral — which is what gives the integral a
   definite upper limit. `atlas` with no arguments runs the self-checks; with any
@@ -42,7 +43,7 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
   non-zero on failure. They stand in for real tests until GoogleTest arrives in S2.
   Each new step adds one; earlier ones stay as regression guards. The seventh
   acceptance check compares two binaries at once, so it cannot be one of them and
-  lives in the Makefile as `check-determinism`.
+  lives in `cmake/CheckDeterminism.cmake`, driven by the `check-determinism` target.
 - **Operating point:** workload constants are deliberately tuned so that offered load is
   about rho 0.67 on cores and 0.34 on memory. At rho >= 1 the queue grows without bound
   and every downstream metric becomes meaningless, so re-check `offered_load` after
@@ -54,9 +55,11 @@ about integer time belongs in `clock.hpp`, not in a markdown file.
 
 ### Next: S2, CMake and real tests
 
-Split the single translation unit into headers and sources, replace the Makefile with
-CMake + `FetchContent`, move the six `check_*()` functions into GoogleTest cases, turn
-`check-determinism` into a golden-trace test, and make the warning set an error in CI.
+CMake and presets are in place (2.1). Still ahead: `.clang-format` (2.2), splitting the
+single translation unit into fine-grained headers under a flat `namespace atlas` with a
+`libatlas` static library and a thin CLI (2.3), GoogleTest via `FetchContent` (2.4), moving
+the six `check_*()` functions into test cases (2.5), turning `check-determinism` into a
+golden-trace test (2.6), and GitHub Actions with the warning set as an error (2.7).
 As headers appear, the invariants below move into the ones they govern and this file
 gets shorter.
 
@@ -83,7 +86,7 @@ it should move into the relevant header as S2 splits the file.
    payload definitions. `pending_` follows the same rule for the backlog, because
    `jobs_` is a vector and reallocation would invalidate every pointer at once.
 4. **Determinism is the headline property.** Same seed → byte-identical trace, across
-   `-O0` and `-O2`, enforced by `make check-determinism`. This one cannot be expressed
+   `-O0` and `-O2`, enforced by the `check-determinism` target. This one cannot be expressed
    in code, so the watch-list stays here: `unordered_map` iteration order, address-based
    sorting, unstable `std::sort`, stdlib-dependent random distributions (`RandomSource`
    hand-rolls its transforms for exactly this reason), and floating point anywhere
@@ -114,6 +117,10 @@ it should move into the relevant header as S2 splits the file.
 
 ### Comments
 
+These govern C++ source. Build files are the exception: `CMakeLists.txt`, the presets,
+and the `Makefile` carry longer explanatory comments on purpose, because they are the
+only documentation of a toolchain nobody reads daily.
+
 - Keep them short: a few lines at most, plain prose. No ASCII rules, banners, or
   section dividers.
 - Comment only where it earns its place: a design choice and the alternative it
@@ -121,16 +128,49 @@ it should move into the relevant header as S2 splits the file.
 - Do not restate the code. No comments on trivial accessors or self-evident names.
 - Prefer why over what.
 
+### Git Usage
+
+- Do not stage/commit changes without specific user direction to do so
+
 ## Commands
 
-```bash
-make                    # build ./atlas
-make run                # build, then run the six self-checks
-make sim                # build, then run one simulation and print the report;
-                        # override any parameter: make sim NODES=16 RATE=0.035
-make check-determinism  # identical trace across -O0 and -O2
-make clean
+CMake is the build system. The `Makefile` is a wrapper over it and contains no build
+knowledge of its own — no flags, no source lists, every recipe a single forward to
+`cmake` or `ctest`. Keep it that way: a flag that lives in two places is a flag that
+will disagree with itself. CI invokes `cmake` directly so the wrapper can never become
+load-bearing.
 
-# From S2, once CMake replaces the Makefile:
-cmake --preset debug && cmake --build --preset debug && ctest --preset debug
+```bash
+make                    # build the debug preset (the default target)
+make release            # build optimized
+make asan               # build with ASan + UBSan
+make run                # build, then run the six self-checks
+make run-asan           # the same self-checks under the sanitizers
+make sim                # build, then run one simulation and report;
+                        # override any parameter: make sim NODES=16 RATE=0.035
+make test               # ctest; registers no cases until step 2.4
+make determinism        # identical trace across -O0 and -O2
+make clean              # delete build/ and trace.jsonl
+make help               # the above, from the shell
 ```
+
+The underlying commands, which CI uses and which the wrapper only shortens:
+
+```bash
+cmake --preset debug            # configure; also `release` and `asan`
+cmake --build --preset debug    # build build/debug/atlas
+ctest --preset debug
+cmake --build --preset debug --target check-determinism
+
+./build/debug/atlas             # no arguments: the six self-checks
+./build/debug/atlas --seed 7 --nodes 8 --jobs 2000 --rate 0.025 --trace trace.jsonl
+```
+
+Presets write to `build/<preset>/`, so `rm -rf build` is always a safe reset. Each build
+target depends on its preset's `CMakeCache.txt`, which makes the configure step run once
+per build directory rather than on every build.
+
+Presets write to `build/<preset>/`. `asan` is Debug plus ASan/UBSan with
+`-fno-sanitize-recover=all`, so a violation aborts instead of printing and continuing.
+`-Werror` is off by default and set by CI via `-DATLAS_WERROR=ON`: a warning should stop
+a merge, not a local experiment.

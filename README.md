@@ -53,16 +53,27 @@ directories above happens in S2, alongside CMake and GoogleTest.
 
 ## Building and running
 
-Requires a C++20 compiler; nothing else, until CMake arrives in S2.
+Requires a C++20 compiler, CMake 3.25+, and Ninja.
 
 ```bash
-make          # build ./atlas
-make run      # the self-checks: six suites covering every component
-make sim      # one simulation, with a report
+cmake --preset debug          # also: release, asan
+cmake --build --preset debug
+./build/debug/atlas           # the self-checks: six suites covering every component
 ```
 
-`make sim` takes overrides for any parameter, so an operating point can be swept
-without a recompile:
+There is a `Makefile` for the commands you type most. It is a wrapper — every recipe
+forwards to `cmake` or `ctest`, and no build setting lives in it — so the two are
+interchangeable:
+
+```bash
+make            # build the debug preset
+make run        # build, then run the self-checks
+make asan       # build with ASan + UBSan
+make help       # every target
+```
+
+`make sim` runs one simulation with a report, and takes overrides for any parameter, so
+an operating point can be swept without a recompile:
 
 ```bash
 make sim NODES=16 RATE=0.035
@@ -104,9 +115,15 @@ the static workload; the timestamped records are what happened. `JobStart` has n
 so file order, not the `seq` field, orders records sharing a timestamp.
 
 The same seed produces a byte-identical trace regardless of optimization level, which
-`make check-determinism` verifies by building at `-O0` and `-O2` and comparing. That
-property is what makes an experimental result reproducible rather than anecdotal, and
-it becomes a golden-trace test in S2.
+the `check-determinism` target verifies by building at `-O0` and `-O2` and comparing:
+
+```bash
+make determinism
+# or: cmake --build --preset debug --target check-determinism
+```
+
+That property is what makes an experimental result reproducible rather than anecdotal,
+and it becomes a golden-trace test later in S2.
 
 ## License
 
