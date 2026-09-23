@@ -22,3 +22,19 @@ target_link_libraries(atlas_tests PRIVATE atlas_lib atlas_warnings GTest::gtest_
 # built binary with --gtest_list_tests to enumerate them.
 include(GoogleTest)
 gtest_discover_tests(atlas_tests)
+
+# The golden trace: one run's complete output, checked in, compared byte for
+# byte. It asserts nothing about what the numbers should be -- only that they
+# have not changed -- which is what makes it catch a bug anywhere in the
+# program at once, and why a diff here must be read rather than re-blessed.
+#
+# Determinism across optimization levels falls out of this for free: CI runs
+# ctest under debug, release and asan, so the same golden file has to match at
+# -O0, -O3 and under sanitizers. That is a stronger check than the two-binary
+# comparison it replaces, and it needs no special target.
+add_test(NAME golden_trace
+  COMMAND ${CMAKE_COMMAND}
+          -D "ATLAS=$<TARGET_FILE:atlas>"
+          -D "GOLDEN=${CMAKE_CURRENT_SOURCE_DIR}/golden/small.jsonl"
+          -D "OUTPUT=${CMAKE_CURRENT_BINARY_DIR}/golden_trace_actual.jsonl"
+          -P "${CMAKE_SOURCE_DIR}/cmake/RunGoldenTrace.cmake")

@@ -1,10 +1,13 @@
 # Atlas
 
+[![CI](https://github.com/N0ck0/atlas-simulator/actions/workflows/ci.yml/badge.svg)](https://github.com/N0ck0/atlas-simulator/actions/workflows/ci.yml)
+
 A discrete-event simulator for experimentally evaluating datacenter scheduling policies.
 
-> **Status: early development.** Stage 1 is complete — the simulator runs end to end,
-> reports metrics, and emits a trace. Stage 2 is in progress. Everything else on the
-> roadmap is not implemented; unchecked boxes mean exactly that.
+> **Status: early development.** Stages 1 and 2 are complete — the simulator runs end
+> to end, reports metrics, emits a trace, and is covered by 40 tests across four build
+> configurations in CI. Everything else on the roadmap is not implemented; unchecked
+> boxes mean exactly that.
 
 ## What this is
 
@@ -51,7 +54,7 @@ Directories marked with a stage do not exist yet.
 ## Roadmap
 
 - [x] **S1** Vertical slice — event queue, clock, nodes, jobs, first-fit placement
-- [ ] **S2** CMake, GoogleTest, CI, golden-trace determinism test
+- [x] **S2** CMake, GoogleTest, CI, golden-trace determinism test
 - [ ] **S3** Pluggable scheduler interface + baselines + metrics
 - [ ] **S4** Live terminal dashboard (FTXUI)
 - [ ] **S5** Network fabric with max-min fair bandwidth sharing
@@ -122,16 +125,18 @@ the static workload; the timestamped records are what happened. `JobStart` has n
 `seq` because placement is not an event — it is a decision made inside a handler —
 so file order, not the `seq` field, orders records sharing a timestamp.
 
-The same seed produces a byte-identical trace regardless of optimization level, which
-the `check-determinism` target verifies by building at `-O0` and `-O2` and comparing:
+The same seed produces a byte-identical trace regardless of compiler or optimization
+level. One run's complete trace is checked into `tests/golden/`, and the `golden_trace`
+test regenerates it and compares byte for byte:
 
 ```bash
-make determinism
-# or: cmake --build --preset debug --target check-determinism
+make determinism   # the golden trace under debug, release and asan
 ```
 
-That property is what makes an experimental result reproducible rather than anecdotal,
-and it becomes a golden-trace test later in S2.
+CI runs the same comparison across gcc and clang at `-O0` and `-O3`, so a trace that
+shifts under any of them fails the build. That property is what makes an experimental
+result reproducible rather than anecdotal. When a change to the trace is intended,
+`make golden-update` regenerates the file — after reading the diff, never before.
 
 ## License
 

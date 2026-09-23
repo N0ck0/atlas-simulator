@@ -82,14 +82,3 @@ if(ATLAS_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
-
-# Invariant 4 needs two binaries built at different optimization levels, so it
-# cannot be a normal test target. Temporary scaffolding: it becomes a ctest
-# case against a checked-in golden trace in step 2.6.
-add_custom_target(check-determinism
-  COMMAND ${CMAKE_COMMAND}
-          -D "CXX=${CMAKE_CXX_COMPILER}"
-          -D "SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-          -D "WORKDIR=${CMAKE_CURRENT_BINARY_DIR}/determinism"
-          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckDeterminism.cmake"
-  VERBATIM)

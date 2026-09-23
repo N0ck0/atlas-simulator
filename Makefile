@@ -13,22 +13,22 @@
 # so the ~2s configure cost is paid once per build directory rather than on
 # every build. Ninja re-runs CMake itself when CMakeLists.txt or
 # CMakePresets.json change, so staleness needs no handling here.
-build/%/CMakeCache.txt:
+build/%/build.ninja:
 	cmake --preset $*
 
 # Compiles build/debug/atlas at -O0 -g with assertions live. Ninja works out
 # what changed and parallelizes across cores, so there is no -j to pass.
-debug: build/debug/CMakeCache.txt
+debug: build/debug/build.ninja
 	cmake --build --preset debug
 
 # Compiles build/release/atlas at -O3 with NDEBUG set, which disables assert().
-release: build/release/CMakeCache.txt
+release: build/release/build.ninja
 	cmake --build --preset release
 
 # Compiles build/asan/atlas with AddressSanitizer and UndefinedBehaviorSanitizer
 # linked in: a few times slower, and aborts with a stack trace the moment the
 # program reads out of bounds, uses freed memory, or overflows a signed integer.
-asan: build/asan/CMakeCache.txt
+asan: build/asan/build.ninja
 	cmake --build --preset asan
 
 # Runs one simulation and prints the report, which is all a bare `atlas` does.
@@ -57,11 +57,21 @@ test-asan: asan
 	ctest --preset asan
 
 # Invariant 4: the same seed must produce a byte-identical trace regardless of
-# optimization level. Builds atlas twice, at -O0 and -O2, runs both, and
-# compares the traces. A CMake target rather than a test because it needs two
-# binaries at once; becomes a ctest case against a golden trace in step 2.6.
-determinism: build/debug/CMakeCache.txt
-	cmake --build --preset debug --target check-determinism
+# optimization level. The golden_trace ctest case pins the trace for one build;
+# running it under all three presets is what pins it ACROSS builds, since debug
+# is -O0, release is -O3 and asan adds instrumentation on top. CI does the same
+# thing by running ctest in each configuration.
+determinism: debug release asan
+	ctest --preset debug -R golden_trace
+	ctest --preset release -R golden_trace
+	ctest --preset asan -R golden_trace
+
+# Regenerates the checked-in golden trace. Only ever run this after reading the
+# diff and concluding the change was intended: blessing an unexamined diff
+# discards exactly the regression the golden trace exists to catch.
+golden-update: debug
+	./build/debug/atlas --seed 7 --nodes 4 --jobs 40 --rate 0.05 \
+	                   --trace tests/golden/small.jsonl
 
 # Every C++ source git knows about, tracked or not. --others --exclude-standard
 # adds files that are new but not gitignored: without them a brand-new file is
@@ -99,7 +109,8 @@ help:
 	@printf '\n'
 	@printf '  make test       run the test suite through ctest\n'
 	@printf '  make test-asan  the same suite under ASan + UBSan\n'
-	@printf '  make determinism  identical trace across -O0 and -O2\n'
+	@printf '  make determinism  golden trace identical across all three presets\n'
+	@printf '  make golden-update  regenerate the golden trace (read the diff first)\n'
 	@printf '  make fmt        reformat all sources with clang-format\n'
 	@printf '  make fmt-check  report unformatted files without editing\n'
 	@printf '  make clean      delete build/ and trace.jsonl\n'
@@ -107,4 +118,4 @@ help:
 	@printf 'The underlying commands, if you prefer them directly:\n'
 	@printf '  cmake --preset debug && cmake --build --preset debug\n'
 
-.PHONY: debug release asan sim test test-asan determinism fmt fmt-check clean help
+.PHONY: debug release asan sim test test-asan determinism golden-update fmt fmt-check clean help

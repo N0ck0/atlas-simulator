@@ -15,8 +15,7 @@ if the answer is none.
 
 ## Current state
 
-- **Stage:** S1 complete (steps 1.1-1.5). S2 in progress: 2.1 (CMake), 2.2
-  (clang-format), 2.3 (header split), 2.4 (GoogleTest) and 2.5 (tests ported) done.
+- **Stage:** S1 and S2 complete. S3 (pluggable schedulers) is next.
 - **What exists:** `libatlas`, a static library of 25 headers and 8 sources under
   `src/atlas/`, plus a thin CLI. Everything is in a flat `namespace atlas`, and
   includes are written from `src/` down (`#include "atlas/engine/clock.hpp"`).
@@ -46,21 +45,22 @@ if the answer is none.
   mirroring `src/`. One binary, `atlas_tests`; `gtest_discover_tests` registers
   each case with ctest individually, so `ctest -R` and `ctest -j` work.
 - **Correctness lives in `tests/`.** The six `check_*()` functions that stood in
-  for tests through S1 are gone; their claims are 39 GoogleTest cases. The
-  determinism acceptance check still cannot be one of them — it needs two
-  binaries at once — and stays in `cmake/CheckDeterminism.cmake` until 2.6.
-  Each new step adds one; earlier ones stay as regression guards. The seventh
-  acceptance check compares two binaries at once, so it cannot be one of them and
-  lives in `cmake/CheckDeterminism.cmake`, driven by the `check-determinism` target.
+  for tests through S1 are gone; their claims are 39 GoogleTest cases, plus the
+  `golden_trace` case that pins one run's entire output byte for byte.
+- **CI is GitHub Actions**, `.github/workflows/ci.yml`: gcc 13 and clang 18 against
+  debug and release, a sanitizer job, and a `clang-format` check, all with
+  `-DATLAS_WERROR=ON`. CI invokes `cmake` and `ctest` directly, never the
+  `Makefile`, so the wrapper can never become load-bearing.
 - **Toolchain:** g++ 13.3, cmake 3.28.3, ninja 1.11.1, ccache 4.9.1, clang-format 18.1.3,
   Python 3.12. WSL2 / Ubuntu 24.04.
 
-### Next: S2, CMake and real tests
+### Next: S3, the pluggable scheduler
 
-CMake and presets (2.1), `.clang-format` (2.2), the header split (2.3) and GoogleTest
-(2.4) and the ported test suite (2.5) are in place. Still ahead: turning
-`check-determinism` into a golden-trace test (2.6), and GitHub Actions with the warning
-set as an error (2.7).
+S2 is done: CMake and presets, `.clang-format`, the header split, GoogleTest, the
+ported suite, the golden trace, and CI. S3 adds the `Scheduler` interface, three
+baselines (RoundRobin, LeastLoaded, ResourceAware), a factory keyed by name, and a
+comparison table across them. It is the stage that produces a result rather than
+infrastructure.
 
 ## Architecture decisions (settled)
 
@@ -87,8 +87,10 @@ below; only what code cannot express is written out here.
 | `std::variant` for events, virtual dispatch for schedulers | `engine/event.hpp` (scheduler half arrives in S3) |
 
 **Determinism is the headline property**, and the one invariant with no home in code.
-Same seed → byte-identical trace, across `-O0` and `-O2`, enforced by the
-`check-determinism` target. So the watch-list stays here: `unordered_map` iteration
+Same seed → byte-identical trace, across compilers and optimization levels. The
+`golden_trace` test enforces it for one build; CI enforces it across all of them by
+running that same test under gcc and clang at `-O0` and `-O3`. What no test can
+enforce is not writing the bug in the first place, so the watch-list stays here: `unordered_map` iteration
 order, address-based sorting, unstable `std::sort`, stdlib-dependent random
 distributions (`RandomSource` hand-rolls its transforms for exactly this reason), and
 floating point anywhere except the final human-readable report.
@@ -146,7 +148,8 @@ make sim                # build, then run one simulation and report;
                         # override any parameter: make sim NODES=16 RATE=0.035
 make test               # run the test suite through ctest
 make test-asan          # the same suite under ASan + UBSan
-make determinism        # identical trace across -O0 and -O2
+make determinism        # golden trace identical across all three presets
+make golden-update      # regenerate the golden trace (read the diff first)
 make fmt                # reformat all sources with clang-format
 make fmt-check          # report unformatted files without editing
 make clean              # delete build/ and trace.jsonl
@@ -159,7 +162,6 @@ The underlying commands, which CI uses and which the wrapper only shortens:
 cmake --preset debug            # configure; also `release` and `asan`
 cmake --build --preset debug    # build build/debug/atlas
 ctest --preset debug
-cmake --build --preset debug --target check-determinism
 
 ./build/debug/atlas             # one simulation at the default operating point
 ./build/debug/atlas --seed 7 --nodes 8 --jobs 2000 --rate 0.025 --trace trace.jsonl

@@ -59,9 +59,8 @@ TEST(EventQueue, IsEmptyAfterPopping) {
     q.schedule(1 * kSecond, JobArrival{JobId{3}});            // seq 3
     q.schedule(1 * kSecond, JobArrival{JobId{4}});            // seq 4
     q.schedule(10 * kSecond, SimEnd{});
-    Tick clock = 0;
     for (std::size_t i = 0; i < kExpectedCount; ++i) {
-        const Event e = q.pop();
+        q.pop();
     }
     EXPECT_TRUE(q.empty());
 }

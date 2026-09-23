@@ -1,0 +1,104 @@
+name: CI
+
+# Runs on every push to main and on every pull request. The point of the second
+# trigger is that a PR is checked before it merges, not after.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the previous run's answer irrelevant, so
+# cancel it rather than pay for both.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Cheap and independent, so it runs alongside the builds rather than gating
+  # them: a formatting nit should not hide a compile error for ten minutes.
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to 18 to match the version developers run locally. clang-format
+      # output changes between major versions, so an unpinned CI would demand
+      # reformatting that the local tool then undoes.
+      - name: Install clang-format 18
+        run: |
+          if ! command -v clang-format-18 >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y clang-format-18
+          fi
+
+      - name: Check formatting
+        run: |
+          git ls-files '*.cpp' '*.hpp' | xargs -r clang-format-18 --dry-run --Werror
+
+  # Four combinations: two compilers against two optimization levels. gcc and
+  # clang disagree about which code is legal often enough to be worth both, and
+  # -O0 versus -O3 catches the bugs that only appear once the optimizer has been
+  # allowed to assume the code is well defined.
+  build-and-test:
+    runs-on: ubuntu-24.04
+    strategy:
+      # Report every failing combination, rather than stopping at the first and
+      # leaving it unclear whether the others would also have failed.
+      fail-fast: false
+      matrix:
+        compiler: [g++-13, clang++-18]
+        preset: [debug, release]
+
+    name: ${{ matrix.compiler }} / ${{ matrix.preset }}
+    env:
+      CXX: ${{ matrix.compiler }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          if ! command -v ${{ matrix.compiler }} >/dev/null; then
+            sudo apt-get install -y ${{ matrix.compiler }}
+          fi
+
+      # ATLAS_WERROR is off by default so a warning never blocks local work, and
+      # on here so one can never reach main.
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DATLAS_WERROR=ON
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      # Includes golden_trace, so this is also where determinism is enforced:
+      # the same checked-in trace has to come back byte-identical from every
+      # compiler and optimization level in the matrix.
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # Separate from the matrix because it answers a different question. The builds
+  # above ask "is it correct"; this asks "is it correct for the right reasons",
+  # and catches undefined behaviour that happens to produce the right answer
+  # today and a different one under a future compiler.
+  sanitizers:
+    runs-on: ubuntu-24.04
+    env:
+      CXX: g++-13
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: cmake --preset asan -DATLAS_WERROR=ON
+
+      - name: Build
+        run: cmake --build --preset asan
+
+      - name: Test
+        run: ctest --preset asan
