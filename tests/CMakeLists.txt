@@ -7,6 +7,7 @@
 add_executable(atlas_tests
   engine/event_queue_test.cpp
   engine/simulator_test.cpp
+  io/compare_test.cpp
   metrics/percentiles_test.cpp
   metrics/utilization_test.cpp
   model/cluster_test.cpp

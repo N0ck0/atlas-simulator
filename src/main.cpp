@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "atlas/engine/simulator.hpp"
+#include "atlas/io/compare.hpp"
 #include "atlas/io/options.hpp"
 #include "atlas/io/report.hpp"
 #include "atlas/io/trace.hpp"
@@ -22,6 +23,14 @@ int main(int argc, char** argv) {
     // default operating point. Correctness checks used to live behind this same
     // entry point; they are GoogleTest cases now, run by ctest.
     const Options opt = parsed.options;
+
+    // The sweep owns its own simulators: it has to build one per (scheduler,
+    // seed), and each one consumes the cluster and the jobs it is given.
+    if (opt.compare) {
+        report_comparison(compare_schedulers(opt, opt.seeds), opt);
+        return 0;
+    }
+
     Cluster main_cluster = Cluster{opt.nodes, kDefaultResources};
     WorkloadGenerator work_gen = WorkloadGenerator(opt.seed, opt.arrival_rate);
     std::vector<Job> jobs = work_gen.generate(opt.jobs);

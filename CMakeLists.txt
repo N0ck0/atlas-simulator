@@ -35,6 +35,7 @@ target_compile_options(atlas_warnings INTERFACE
 # pybind11 can link it as-is in S6.
 add_library(atlas_lib STATIC
   src/atlas/engine/simulator.cpp
+  src/atlas/io/compare.cpp
   src/atlas/io/options.cpp
   src/atlas/io/report.cpp
   src/atlas/io/trace.cpp

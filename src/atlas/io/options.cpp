@@ -19,6 +19,8 @@ static void print_usage(const char* program) {
                  "  --rate F        arrivals per second (default 0.025)\n"
                  "  --scheduler S   placement policy (default first_fit)\n"
                  "  --trace PATH    write a JSONL event trace to PATH\n"
+                 "  --compare       run every scheduler and print a table\n"
+                 "  --seeds N       seeds per scheduler under --compare (default 30)\n"
                  "  --help          this message\n",
                  program);
 
@@ -53,6 +55,12 @@ ParsedArgs parse_args(int argc, char** argv) {
             return ParsedArgs{ParsedArgs::Status::HelpRequested, {}};
         }
 
+        // Checked before the bounds check below, which assumes a value follows.
+        if (std::strcmp(flag, "--compare") == 0) {
+            opts.compare = true;
+            continue;
+        }
+
         // Every remaining flag takes a value, so the bounds check lives here
         // once. Without it a trailing "--seed" reads argv[argc], which is the
         // null terminator at best and past the end at worst.
@@ -74,6 +82,8 @@ ParsedArgs parse_args(int argc, char** argv) {
             parsed = parse_value(value, opts.arrival_rate);
         } else if (std::strcmp(flag, "--scheduler") == 0) {
             opts.scheduler = value;
+        } else if (std::strcmp(flag, "--seeds") == 0) {
+            parsed = parse_value(value, opts.seeds);
         } else if (std::strcmp(flag, "--trace") == 0) {
             opts.trace_path = value;
         } else {
@@ -107,6 +117,10 @@ ParsedArgs parse_args(int argc, char** argv) {
         problem = "--jobs must be at least 1";
     else if (!(opts.arrival_rate > 0.0))
         problem = "--rate must be positive";
+    else if (opts.seeds == 0)
+        problem = "--seeds must be at least 1";
+    else if (opts.compare && opts.trace_path != nullptr)
+        problem = "--compare and --trace are exclusive: a sweep would overwrite one path per run";
     if (problem != nullptr) {
         std::fprintf(stderr, "%s: %s\n", program, problem);
         return ParsedArgs{ParsedArgs::Status::Error, {}};

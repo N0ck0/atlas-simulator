@@ -4,10 +4,10 @@
 
 A discrete-event simulator for experimentally evaluating datacenter scheduling policies.
 
-> **Status: early development.** Stages 1 and 2 are complete — the simulator runs end
-> to end, reports metrics, emits a trace, and is covered by 40 tests across four build
-> configurations in CI. Everything else on the roadmap is not implemented; unchecked
-> boxes mean exactly that.
+> **Status: early development.** Stages 1 and 2 are complete and Stage 3 is nearly so —
+> the simulator runs end to end, compares four scheduling policies, reports metrics,
+> emits a trace, and is covered by 87 tests across four build configurations in CI.
+> Everything else on the roadmap is not implemented; unchecked boxes mean exactly that.
 
 ## What this is
 
@@ -78,7 +78,7 @@ interchangeable:
 
 ```bash
 make            # build the debug preset
-make test       # the test suite: 39 GoogleTest cases
+make test       # the test suite: 87 GoogleTest cases
 make asan       # build with ASan + UBSan
 make help       # every target
 ```
@@ -106,6 +106,66 @@ time-weighted fraction actually consumed. They track closely when the cluster ke
 up, and diverge when it cannot. Percentiles rather than means because the
 distributions are skewed, and `--scheduler` selects the placement policy: `first_fit`,
 `round_robin`, `least_loaded`, or `resource_aware`.
+
+## Comparing schedulers
+
+`--compare` runs every policy over the same set of seeds and prints a table. Each
+scheduler sees the identical workload on each seed, which is what makes the last
+column meaningful:
+
+```
+compare: seeds 7..36  nodes 8  jobs 2000  rate 0.025/s
+  offered rho   cores 0.6155  memory 0.6041  (mean over 30 seeds)
+
+  scheduler         util    util    p95 turn       sd   p95 queue      paired delta   wins  cens
+                   cores     mem    mean (s)      (s)    mean (s)    mean (s) +- se
+  first_fit       0.5952  0.5842      2688.7   1217.6      2084.8          baseline   8/30     0
+  round_robin     0.5953  0.5843      2682.8   1189.3      2079.5       -6.0 +-  7.9   6/30     0
+  least_loaded    0.5952  0.5841      2695.9   1194.5      2093.1       +7.1 +-  7.9   5/30     0
+  resource_aware  0.5953  0.5842      2675.9   1187.1      2072.5      -12.8 +-  7.3  11/30     0
+```
+
+The two spread columns measure different things. `sd` is the variation in p95
+turnaround *across seeds*, and at ~1200s it is dominated by how much one random
+workload differs from another — nothing to do with scheduling. `± se` is the
+uncertainty on the *paired* difference: because both policies ran the same workload
+on each seed, subtracting them cancels that seed's difficulty, and what remains is
+the effect of the policy. That is why the same data supports a spread of 1200s and an
+uncertainty of 8s at the same time.
+
+Read that way, the table reports a **null result**. The best policy is ahead of the
+baseline by 12.8s ± 7.3s on a p95 of ~2700s — under half a percent, and under two
+standard errors. The four policies are not distinguishable at this operating point.
+
+## Why placement barely matters here, and what would
+
+The null result is not a defect in the policies. It is a consequence of the queue
+discipline sitting in front of them. Placement is strict FIFO: `drain()` stops at the
+head of the backlog the moment it does not fit, so one job that cannot be placed holds
+every job behind it, however small.
+
+Raising the arrival rate shows what that costs:
+
+| offered rho (cores) | achieved utilization | p95 queue wait |
+| --- | --- | --- |
+| 0.62 | 0.592 | 2,136s |
+| 0.74 | 0.636 | 9,448s |
+| 0.92 | 0.638 | 20,839s |
+| 1.12 | 0.639 | 29,764s |
+
+Offered load nearly doubles and passes 100% of capacity. Queue wait grows fourteenfold.
+**Utilization stops at 0.64.** The cluster will leave a third of its cores idle
+indefinitely rather than run the work queued for them.
+
+The mechanism is the job mix against the node size. A `large` job asks for all 16 of a
+node's cores, and one job in four is `large`. When one reaches the head of the queue it
+waits for an entire node to empty, while `small` jobs that would fit in the gaps on
+three other nodes wait behind it. No placement policy can address this, because by the
+time a scheduler is consulted the choice of *which* job to run has already been made.
+
+That is the argument for **backfill**: allow a job further down the queue to run when it
+fits and the head job does not. Against a 64% ceiling the available headroom is large,
+which is why it is the next thing to build rather than a fifth placement policy.
 
 ## Trace format
 
