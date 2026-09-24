@@ -85,12 +85,34 @@ TEST_F(ResourceAwareTest, IdentifiesItselfAsResourceAware) {
     EXPECT_EQ(scheduler_.name(), "resource_aware");
 }
 
-// Yours. Build a cluster whose nodes have differently-shaped remainders, then
-// assert that a job whose shape suits one of them lands there. If you cannot
-// construct a case where this answers differently from LeastLoaded, the policy
-// is not yet distinct and the 3.4 table will have two identical columns.
-TEST_F(ResourceAwareTest, DISABLED_PrefersTheNodeWhoseShapeSuitsTheJob) {
-    FAIL() << "choose a fit rule, then encode the case that distinguishes it";
+// The policy, and the case that separates it from LeastLoaded. Node 0 is empty
+// and node 1 is half used; both fit the job.
+//
+// LeastLoaded spreads, so it would take the empty node 0. This packs: it takes
+// node 1, the tightest fit, leaving node 0 whole for a job that needs a whole
+// node. Two policies, opposite answers, same input -- which is what makes them
+// worth comparing in a table.
+TEST_F(ResourceAwareTest, PacksOntoTheTightestFitRatherThanSpreading) {
+    cluster_.allocate(NodeId{1}, Resources{4u, 8'192u});
+
+    const std::optional<NodeId> placed =
+        scheduler_.place(job_requesting(Resources{1u, 1'024u}), cluster_.nodes_span());
+
+    ASSERT_TRUE(placed.has_value());
+    EXPECT_EQ(*placed, NodeId{1}) << "should consume the busier node, not the empty one";
+}
+
+// Packing is bounded by feasibility: the tightest fit among nodes that fit, not
+// the tightest fit overall. Node 3 is fullest but cannot take the job.
+TEST_F(ResourceAwareTest, NeverPacksOntoANodeThatDoesNotFit) {
+    cluster_.allocate(NodeId{3}, Resources{7u, 15'000u});
+
+    const Job job = job_requesting(Resources{2u, 2'048u});
+    const std::optional<NodeId> placed = scheduler_.place(job, cluster_.nodes_span());
+
+    ASSERT_TRUE(placed.has_value());
+    EXPECT_NE(*placed, NodeId{3});
+    EXPECT_TRUE(cluster_.node(*placed).can_fit(job.request));
 }
 
 }  // namespace

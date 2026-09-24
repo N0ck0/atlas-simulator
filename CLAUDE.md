@@ -15,9 +15,9 @@ if the answer is none.
 
 ## Current state
 
-- **Stage:** S1 and S2 complete. S3 in progress: 3.1 (Scheduler interface, FirstFit,
-  Simulator wiring) and 3.2 (factory and `--scheduler`) done. Next is 3.3, the three
-  baselines.
+- **Stage:** S1 and S2 complete. S3 in progress: 3.1-3.3 done — the Scheduler
+  interface, the factory and `--scheduler`, and four policies. Next is 3.4, the
+  comparison table.
 - **What exists:** `libatlas`, a static library of 25 headers and 8 sources under
   `src/atlas/`, plus a thin CLI. Everything is in a flat `namespace atlas`, and
   includes are written from `src/` down (`#include "atlas/engine/clock.hpp"`).
@@ -27,7 +27,8 @@ if the answer is none.
   - `metrics/` — `load_factor`, `time_sample`, `percentiles`, `utilization`,
     `offered_load`
   - `io/` — `options` (CLI parsing), `trace`, `report`
-  - `sched/` — `scheduler` (the abstract interface), `first_fit`, `factory`
+  - `sched/` — `scheduler` (the abstract interface), `factory`, `dominant_share`,
+    and four policies: `first_fit`, `round_robin`, `least_loaded`, `resource_aware`
   - `src/main.cpp` is the CLI, and the only source outside the library.
 - **A run reports.** `SimEnd` is scheduled at `now_` once the queue drains, and its
   handler closes the utilization integral — which is what gives the integral a
@@ -36,9 +37,12 @@ if the answer is none.
   counts; every option has a default, so a bare `atlas` is a valid run.
 - **Placement is strict FIFO.** `drain()` stops at the head of `pending_` when it
   does not fit, so a large job blocks smaller ones behind it. At the default
-  operating point this costs nothing at the median — p50 queue wait is 0s — and
-  everything in the tail, where p95 is roughly ten minutes. Backfill and pluggable
-  schedulers are S3, and this is the baseline they get measured against.
+  operating point every job waits: p50 queue wait is about 16 minutes against a
+  p50 turnaround of 21. That head-of-line blocking dominates, which is why the
+  four schedulers in S3 separate by only a couple of percent — where a job lands
+  matters far less than the fact that a `large` job ahead of it holds the whole
+  queue. Backfill is not implemented; this FIFO baseline is what it would be
+  measured against.
 - **Censored jobs are counted, never silently dropped.** A job that never finished
   is excluded from the turnaround sample and counted in `TimeSample::skipped`. A
   large `skipped` beside a near-zero utilization is the signature of a cluster that
@@ -57,13 +61,15 @@ if the answer is none.
 - **Toolchain:** g++ 13.3, cmake 3.28.3, ninja 1.11.1, ccache 4.9.1, clang-format 18.1.3,
   Python 3.12. WSL2 / Ubuntu 24.04.
 
-### Next: S3, the pluggable scheduler
+### Next: 3.4, the comparison table
 
-S2 is done: CMake and presets, `.clang-format`, the header split, GoogleTest, the
-ported suite, the golden trace, and CI. S3 adds the `Scheduler` interface, three
-baselines (RoundRobin, LeastLoaded, ResourceAware), a factory keyed by name, and a
-comparison table across them. It is the stage that produces a result rather than
-infrastructure.
+Four policies exist and separate in the direction theory predicts -- packing
+(`resource_aware`, `first_fit`) beats spreading (`least_loaded`, `round_robin`) because
+a `large` job needs a whole node and spreading fragments capacity. The margin is about
+2% on p95 turnaround, which is thin for a headline result: strict FIFO means the queue
+discipline dominates the placement decision. 3.4 renders the table; 3.5 decides whether
+to widen the gap (backfill, heterogeneous nodes, or a load band where the queue is
+active but not saturated) or to report the narrow result and explain it.
 
 ## Architecture decisions (settled)
 
@@ -99,8 +105,9 @@ distributions (`RandomSource` hand-rolls its transforms for exactly this reason)
 floating point anywhere except the final human-readable report.
 
 **The operating point** is a property of the numbers, not of any one file. Workload
-constants are deliberately tuned so that offered load is about rho 0.67 on cores and
-0.34 on memory. At rho >= 1 the queue grows without bound and every downstream metric
+constants are deliberately tuned so that offered load is about rho 0.62 on cores and
+0.61 on memory -- close together on purpose, because a workload whose dimensions move
+together is effectively one-dimensional and no multi-resource policy can differ on it. At rho >= 1 the queue grows without bound and every downstream metric
 becomes meaningless, so re-check `offered_load` after changing the arrival rate, the
 profile table, or the cluster size. Node capacity and the profile table have to stay
 compatible — a node smaller than the largest profile can never place it, and FIFO then

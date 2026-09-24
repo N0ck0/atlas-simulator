@@ -3,6 +3,8 @@
 #include <array>
 
 #include "atlas/sched/first_fit.hpp"
+#include "atlas/sched/least_loaded.hpp"
+#include "atlas/sched/resource_aware.hpp"
 #include "atlas/sched/round_robin.hpp"
 
 namespace atlas {
@@ -16,7 +18,8 @@ namespace {
 // project's headline property, and a registry whose iteration order depends on
 // link order is exactly the kind of thing that breaks a golden trace on someone
 // else's machine. Four entries in a fixed order costs one line per scheduler.
-constexpr std::array<std::string_view, 2> kNames{"first_fit", "round_robin"};
+constexpr std::array<std::string_view, 4> kNames{"first_fit", "round_robin", "least_loaded",
+                                                 "resource_aware"};
 
 }  // namespace
 
@@ -25,6 +28,8 @@ std::span<const std::string_view> scheduler_names() { return kNames; }
 std::unique_ptr<Scheduler> make_scheduler(std::string_view name) {
     if (name == "first_fit") return std::make_unique<FirstFitScheduler>();
     if (name == "round_robin") return std::make_unique<RoundRobinScheduler>();
+    if (name == "least_loaded") return std::make_unique<LeastLoadedScheduler>();
+    if (name == "resource_aware") return std::make_unique<ResourceAwareScheduler>();
     return nullptr;
 }
 

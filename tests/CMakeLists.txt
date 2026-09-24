@@ -18,8 +18,8 @@ add_executable(atlas_tests
   # 3.3: uncomment each as its scheduler lands, so the suite stays runnable
   # while the other two are still unwritten.
   sched/round_robin_test.cpp
-  # sched/least_loaded_test.cpp
-  # sched/resource_aware_test.cpp
+  sched/least_loaded_test.cpp
+  sched/resource_aware_test.cpp
 )
 
 # atlas_warnings applies to these sources but not to GoogleTest's own, which is

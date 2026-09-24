@@ -94,13 +94,41 @@ TEST_F(LeastLoadedTest, BreaksTiesByLowestNodeIndex) {
     EXPECT_EQ(*placed, NodeId{0}) << "all four nodes are identical here";
 }
 
-// Yours to write once you have chosen how to combine the two dimensions. Set up
-// a cluster where one node has more free cores and another has more free
-// memory, then assert the answer your rule gives. Remove the DISABLED_ prefix
-// when you do -- GoogleTest reports disabled tests as skipped, so it will keep
-// reminding you until then.
-TEST_F(LeastLoadedTest, DISABLED_TwoDimensionalRankingIsYourChoice) {
-    FAIL() << "decide how cores and memory combine, then encode it here";
+// The ranking rule, pinned by the two cases that distinguish it from the
+// obvious alternatives. Node capacity here is 8 cores / 16384 MB.
+//
+// Against ranking on the MEAN of the two fractions: node 0 is 75% on cores and
+// 0% on memory (mean 0.375); node 1 is 50% on both (mean 0.5). A mean would
+// prefer node 0. Taking the larger fraction prefers node 1, because node 0 is
+// three quarters gone on the dimension that actually constrains it.
+TEST_F(LeastLoadedTest, RanksOnTheLargerFractionNotTheAverage) {
+    cluster_.allocate(NodeId{0}, Resources{6u, 0u});
+    cluster_.allocate(NodeId{1}, Resources{4u, 8'192u});
+    cluster_.allocate(NodeId{2}, kPerNode);
+    cluster_.allocate(NodeId{3}, kPerNode);
+
+    const std::optional<NodeId> placed =
+        scheduler_.place(job_requesting(Resources{1u, 1'024u}), cluster_.nodes_span());
+
+    ASSERT_TRUE(placed.has_value());
+    EXPECT_EQ(*placed, NodeId{1});
+}
+
+// Against ranking on free cores alone: node 0 has the most free cores (7 of 8)
+// but almost no memory left, so it is the more constrained node despite looking
+// emptiest on one axis. A single-dimension rule picks node 0; this one picks
+// node 1.
+TEST_F(LeastLoadedTest, ACoreRichNodeWithNoMemoryIsNotTheLeastLoaded) {
+    cluster_.allocate(NodeId{0}, Resources{1u, 15'000u});
+    cluster_.allocate(NodeId{1}, Resources{4u, 4'096u});
+    cluster_.allocate(NodeId{2}, kPerNode);
+    cluster_.allocate(NodeId{3}, kPerNode);
+
+    const std::optional<NodeId> placed =
+        scheduler_.place(job_requesting(Resources{1u, 1'024u}), cluster_.nodes_span());
+
+    ASSERT_TRUE(placed.has_value());
+    EXPECT_EQ(*placed, NodeId{1});
 }
 
 TEST_F(LeastLoadedTest, IdentifiesItselfAsLeastLoaded) {

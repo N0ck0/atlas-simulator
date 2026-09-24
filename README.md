@@ -94,18 +94,18 @@ A run reports what the cluster actually did, next to what was asked of it:
 
 ```
 run: seed 7  nodes 8  jobs 2000  rate 0.025/s  scheduler first_fit
-  span               79950.8s
-  offered rho   cores 0.6721  memory 0.3361
-  utilization   cores 0.6621  memory 0.3310
-  turnaround    p50    140.4s  p95   1335.6s  p99   2375.4s  (0 censored)
-  queue wait    p50      0.0s  p95    582.0s  p99    757.5s  (0 censored)
+  span               81161.9s
+  offered rho   cores 0.6209  memory 0.6144
+  utilization   cores 0.6025  memory 0.5962
+  turnaround    p50   1258.8s  p95   2745.3s  p99   3642.9s  (0 censored)
+  queue wait    p50    980.6s  p95   2228.2s  p99   2487.8s  (0 censored)
 ```
 
 `offered rho` is the demand the workload places on the cluster; `utilization` is the
 time-weighted fraction actually consumed. They track closely when the cluster keeps
 up, and diverge when it cannot. Percentiles rather than means because the
-distributions are skewed: at this operating point the median job never queues at
-all, while the unlucky one percent waits over twelve minutes.
+distributions are skewed, and `--scheduler` selects the placement policy: `first_fit`,
+`round_robin`, `least_loaded`, or `resource_aware`.
 
 ## Trace format
 
