@@ -5,8 +5,8 @@
 namespace atlas {
 
 // A bundle of resource dimensions, used for both node capacity and job
-// requests. Grouping them keeps adding a dimension (storage in S5) to a single
-// edit here rather than a change at every signature and call site.
+// requests. Grouping them keeps adding a dimension -- storage, say -- to a
+// single edit here rather than a change at every signature and call site.
 struct Resources {
     std::uint32_t cores = 0;
     std::uint64_t memory_mb = 0;

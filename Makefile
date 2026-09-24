@@ -47,7 +47,7 @@ sim: debug
 
 # Runs the GoogleTest suite through ctest, which reports pass/fail per case.
 # ctest rather than the test binary directly because it is the layer that also
-# runs non-GoogleTest checks -- the golden-trace comparison arriving in 2.6.
+# runs the non-GoogleTest checks, such as the golden-trace comparison.
 test: debug
 	ctest --preset debug
 
@@ -86,8 +86,8 @@ fmt:
 	$(ATLAS_SOURCES) | xargs -r clang-format -i
 
 # Reports which files are not formatted correctly, without editing anything, and
-# exits non-zero if any are. This is what CI runs from step 2.7. clang-format
-# output varies between major versions, so CI pins the version installed here (18).
+# exits non-zero if any are. This is what CI runs. clang-format output varies
+# between major versions, so CI pins the version installed here (18).
 fmt-check:
 	$(ATLAS_SOURCES) | xargs -r clang-format --dry-run --Werror
 

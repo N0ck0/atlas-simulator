@@ -28,7 +28,7 @@ struct SimEnd {};
 //
 // Schedulers make the opposite choice deliberately: virtual dispatch, because
 // that set is open with one operation over it, where this one is closed with
-// many. See the Scheduler interface in S3.
+// many. See sched/scheduler.hpp.
 using EventPayload = std::variant<JobArrival, JobFinish, SimEnd>;
 template <typename...>
 constexpr bool kAlwaysFalse = false;

@@ -42,8 +42,9 @@ TraceWriter::TraceWriter(const Options& opt) {
         return;
     }
     write_line(std::format(
-        R"({{"ev":"header","seed":{},"nodes":{},"jobs":{},"arrival_rate":{},"scheduler":"{}"}})",
-        opt.seed, opt.nodes, opt.jobs, opt.arrival_rate, opt.scheduler));
+        R"({{"ev":"header","seed":{},"nodes":{},"jobs":{},"arrival_rate":{},"scheduler":"{}","queue":"{}","padding":{}}})",
+        opt.seed, opt.nodes, opt.jobs, opt.arrival_rate, opt.scheduler, opt.queue,
+        opt.estimate_padding));
 }
 
 // Every record goes through here, so the one-object-per-line invariant is
@@ -65,9 +66,10 @@ void TraceWriter::write(const Event& e) {
 
 void TraceWriter::job_spec(const Job& j) {
     if (out_ == nullptr) return;
-    write_line(std::format(R"({{"ev":"job","job":{},"submit":{},"dur":{},"cores":{},"mem_mb":{}}})",
-                           static_cast<std::uint32_t>(j.id), j.submit_time, j.duration,
-                           j.request.cores, j.request.memory_mb));
+    write_line(std::format(
+        R"({{"ev":"job","job":{},"submit":{},"dur":{},"est":{},"cores":{},"mem_mb":{}}})",
+        static_cast<std::uint32_t>(j.id), j.submit_time, j.duration, j.estimated_duration,
+        j.request.cores, j.request.memory_mb));
 }
 
 void TraceWriter::placement(Tick t, JobId job, NodeId node) {

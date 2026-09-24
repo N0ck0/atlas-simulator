@@ -13,11 +13,10 @@ add_executable(atlas_tests
   model/cluster_test.cpp
   model/random_test.cpp
   model/workload_test.cpp
+  sched/backfill_test.cpp
   sched/factory_test.cpp
   sched/scheduler_contract_test.cpp
   sched/first_fit_test.cpp
-  # 3.3: uncomment each as its scheduler lands, so the suite stays runnable
-  # while the other two are still unwritten.
   sched/round_robin_test.cpp
   sched/least_loaded_test.cpp
   sched/resource_aware_test.cpp

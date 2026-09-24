@@ -1,19 +1,23 @@
 #include "atlas/engine/simulator.hpp"
 
+#include <algorithm>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
+#include "atlas/sched/fifo_queue.hpp"
 #include "atlas/sched/first_fit.hpp"
 
 namespace atlas {
 
 Simulator::Simulator(Cluster cluster, std::vector<Job> jobs, TraceWriter* trace,
-                     std::unique_ptr<Scheduler> scheduler)
+                     std::unique_ptr<Scheduler> scheduler,
+                     std::unique_ptr<QueuePolicy> queue_policy)
     : cluster_(std::move(cluster)),
       jobs_(std::move(jobs)),
       trace_(trace),
-      scheduler_(scheduler ? std::move(scheduler) : std::make_unique<FirstFitScheduler>()) {}
+      scheduler_(scheduler ? std::move(scheduler) : std::make_unique<FirstFitScheduler>()),
+      queue_policy_(queue_policy ? std::move(queue_policy) : std::make_unique<FifoQueuePolicy>()) {}
 
 LoadFactor Simulator::mean_utilization() const {
     assert(sim_end_ < kNever);
@@ -63,21 +67,69 @@ void Simulator::run() {
     }
 }
 
-void Simulator::drain() {
-    while (!pending_.empty()) {
-        JobId next_job_id = pending_.front();
-        Job& next_job = job(next_job_id);
-        auto res = scheduler_->place(next_job, cluster_.nodes_span());
-        if (!res.has_value()) break;
+bool Simulator::try_place(JobId id) {
+    Job& j = job(id);
+    const std::optional<NodeId> node = scheduler_->place(j, cluster_.nodes_span());
+    if (!node.has_value()) return false;
 
-        //Job at front of pending queue can be assigned
-        cluster_.allocate(res.value(), next_job.request);
-        next_job.state = JobState::Running;
-        next_job.start_time = now_;
-        next_job.node = res.value();
-        if (trace_ != nullptr) trace_->placement(now_, next_job.id, next_job.node);
+    cluster_.allocate(*node, j.request);
+    j.state = JobState::Running;
+    j.start_time = now_;
+    j.node = *node;
+    running_.push_back(id);
+    if (trace_ != nullptr) trace_->placement(now_, j.id, j.node);
+    queue_.schedule(now_ + j.duration, JobFinish{j.id, j.node});
+    return true;
+}
+
+void Simulator::rebuild_views() {
+    backlog_view_.clear();
+    for (const JobId id : pending_) {
+        const Job& j = job(id);
+        backlog_view_.push_back(QueuedJob{.id = j.id,
+                                          .request = j.request,
+                                          .estimated_duration = j.estimated_duration,
+                                          .submit_time = j.submit_time});
+    }
+
+    running_view_.clear();
+    for (const JobId id : running_) {
+        const Job& j = job(id);
+        running_view_.push_back(
+            RunningJob{.id = j.id,
+                       .node = j.node,
+                       .held = j.request,
+                       .estimated_finish = j.start_time + j.estimated_duration});
+    }
+}
+
+void Simulator::drain() {
+    // Phase 1: strict FIFO. Unchanged from before queue policies existed, and
+    // the whole of the behaviour when the policy is fifo.
+    while (!pending_.empty() && try_place(pending_.front())) {
         pending_.pop_front();
-        queue_.schedule(now_ + next_job.duration, JobFinish{next_job.id, next_job.node});
+    }
+    if (pending_.empty()) return;
+
+    // Phase 2: the head is blocked. Ask what, if anything, may go around it.
+    while (true) {
+        rebuild_views();
+        const std::optional<JobId> pick =
+            queue_policy_->backfill(backlog_view_, cluster_.nodes_span(), running_view_, now_);
+        if (!pick.has_value()) break;
+        assert(*pick != pending_.front());
+
+        // The policy contract is that a returned job fits somewhere now. If it
+        // does not, the two interfaces disagree about what "fits" means and
+        // the run is no longer measuring what it claims to.
+        const bool placed = try_place(*pick);
+        assert(placed);
+        (void)placed;
+
+        const auto it = std::find(pending_.begin(), pending_.end(), *pick);
+        assert(it != pending_.end());
+        pending_.erase(it);
+        ++backfilled_;
     }
 }
 
@@ -99,6 +151,14 @@ void Simulator::on_finish(const JobFinish& finish) {
     cluster_.release(this_job.node, this_job.request);
     this_job.finish_time = now_;
     this_job.state = JobState::Done;
+
+    // Removed before drain() so the queue policy never sees a finished job in
+    // its running view and computes a reservation against resources that are
+    // already free.
+    const auto it = std::find(running_.begin(), running_.end(), finish.job);
+    assert(it != running_.end());
+    running_.erase(it);
+
     drain();
 }
 

@@ -22,17 +22,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(ATLAS_WERROR "Treat compiler warnings as errors" OFF)
 
 # The warning set lives on one INTERFACE target so that libatlas, the CLI, and
-# the test binaries cannot drift apart on it as S2 splits them up. Off by
-# default and on in CI: a warning should stop a merge, not a local experiment.
+# the test binaries cannot drift apart on it. Off by default and on in CI: a
+# warning should stop a merge, not a local experiment.
 # Flags are GCC/Clang spellings; those are the only two compilers targeted.
 add_library(atlas_warnings INTERFACE)
 target_compile_options(atlas_warnings INTERFACE
   -Wall -Wextra -Wpedantic -Wshadow -Wconversion
   $<$<BOOL:${ATLAS_WERROR}>:-Werror>)
 
-# The simulator core, built once and linked by both the CLI and (from step 2.4)
-# the test binaries. A static library rather than an object library so that
-# pybind11 can link it as-is in S6.
+# The simulator core, built once and linked by both the CLI and the test
+# binaries. A static library rather than an object library so that a future
+# pybind11 module can link it as-is.
 add_library(atlas_lib STATIC
   src/atlas/engine/simulator.cpp
   src/atlas/io/compare.cpp
@@ -40,7 +40,10 @@ add_library(atlas_lib STATIC
   src/atlas/io/report.cpp
   src/atlas/io/trace.cpp
   src/atlas/metrics/offered_load.cpp
+  src/atlas/sched/backfill.cpp
   src/atlas/sched/factory.cpp
+  src/atlas/sched/fifo_queue.cpp
+  src/atlas/sched/queue_factory.cpp
   src/atlas/sched/first_fit.cpp
   src/atlas/sched/least_loaded.cpp
   src/atlas/sched/resource_aware.cpp

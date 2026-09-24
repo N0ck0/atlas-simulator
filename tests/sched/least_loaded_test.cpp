@@ -1,16 +1,10 @@
 // LeastLoaded: place on the node with the most room.
 //
-// TODO(nick): implement src/atlas/sched/least_loaded.{hpp,cpp}, add
-// "least_loaded" to the factory's table and kNames, add the .cpp to atlas_lib,
-// and uncomment this file in tests/CMakeLists.txt.
-//
-// One design decision is yours and is deliberately not pinned down below: cores
-// and megabytes are not comparable, so "most room" needs a rule for combining
-// two dimensions into one ranking. Fraction of capacity free per dimension and
-// then the minimum? The mean? Cores first, memory as tie-break? Each is
-// defensible and each produces a different table in 3.4, so whichever you pick,
-// write the case that distinguishes it into TwoDimensionalRankingIsYourChoice
-// below. The cases above it hold whatever you decide.
+// Cores and megabytes are not comparable, so "most room" needs a rule for
+// collapsing two dimensions into one ranking. The minimum free fraction across
+// dimensions, the mean, and cores-with-memory-as-tie-break are all defensible
+// and each produces a different comparison table. This one ranks on the
+// scarcer dimension; the cases below pin that choice.
 
 #include "atlas/sched/least_loaded.hpp"
 
@@ -82,10 +76,9 @@ TEST_F(LeastLoadedTest, OnlyRanksNodesThatFit) {
     EXPECT_EQ(*placed, NodeId{1});
 }
 
-// Invariant 4: identical nodes must not be separated by anything the standard
-// leaves unspecified. Lowest index is the recommended rule -- it matches
-// FirstFit and needs no justification in a write-up -- but any fixed, total
-// order works. If you choose differently, change the expectation here.
+// Identical nodes must not be separated by anything the standard leaves
+// unspecified. Lowest index matches FirstFit; any fixed total order would do,
+// but the choice has to be pinned somewhere.
 TEST_F(LeastLoadedTest, BreaksTiesByLowestNodeIndex) {
     const std::optional<NodeId> placed =
         scheduler_.place(job_requesting(Resources{1u, 1'024u}), cluster_.nodes_span());

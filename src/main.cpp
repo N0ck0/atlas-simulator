@@ -11,6 +11,7 @@
 #include "atlas/model/profiles.hpp"
 #include "atlas/model/workload.hpp"
 #include "atlas/sched/factory.hpp"
+#include "atlas/sched/queue_factory.hpp"
 
 using namespace atlas;
 
@@ -32,13 +33,14 @@ int main(int argc, char** argv) {
     }
 
     Cluster main_cluster = Cluster{opt.nodes, kDefaultResources};
-    WorkloadGenerator work_gen = WorkloadGenerator(opt.seed, opt.arrival_rate);
+    WorkloadGenerator work_gen =
+        WorkloadGenerator(opt.seed, opt.arrival_rate, opt.estimate_padding);
     std::vector<Job> jobs = work_gen.generate(opt.jobs);
     TraceWriter writer{opt};
 
     // parse_args has already rejected an unknown name, so this cannot be null.
-    Simulator sim =
-        Simulator(std::move(main_cluster), std::move(jobs), &writer, make_scheduler(opt.scheduler));
+    Simulator sim = Simulator(std::move(main_cluster), std::move(jobs), &writer,
+                              make_scheduler(opt.scheduler), make_queue_policy(opt.queue));
     sim.run();
 
     report(sim, opt);

@@ -1,5 +1,5 @@
-// Placement policy, which moved out of Cluster in S3: the cluster now only does
-// resource accounting, and choosing a node is a scheduler's job.
+// Placement policy. Cluster does resource accounting only; choosing a node is
+// a scheduler's job.
 //
 // These cases pin the behaviour the golden trace was recorded against, so a
 // FirstFitScheduler that scanned in a different order or broke ties differently
@@ -76,7 +76,7 @@ TEST_F(FirstFitTest, SkipsAFullNodeForOneWithRoom) {
     EXPECT_EQ(*placed, NodeId{1});
 }
 
-// The factory in 3.2 selects a scheduler by this string, so it is part of the
+// The factory selects a scheduler by this string, so it is part of the
 // contract rather than a label.
 TEST_F(FirstFitTest, IdentifiesItselfAsFirstFit) { EXPECT_EQ(scheduler_.name(), "first_fit"); }
 

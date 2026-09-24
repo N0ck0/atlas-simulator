@@ -15,6 +15,7 @@
 #include "atlas/model/profiles.hpp"
 #include "atlas/model/workload.hpp"
 #include "atlas/sched/factory.hpp"
+#include "atlas/sched/queue_factory.hpp"
 
 namespace atlas {
 
@@ -28,25 +29,38 @@ static Tick p95_or_zero(std::vector<Tick> times) {
 }
 
 Comparison compare_schedulers(const Options& opts, std::uint32_t seed_count) {
-    const std::span<const std::string_view> names = scheduler_names();
+    const std::span<const std::string_view> sched = scheduler_names();
+    const std::span<const std::string_view> queues = queue_policy_names();
+    const std::size_t configs = sched.size() * queues.size();
 
     Comparison res{};
     res.base_seed = opts.seed;
     res.seeds = seed_count;
     res.offered_rho.resize(seed_count);
-    res.rows.assign(names.size(), std::vector<RunResult>(seed_count));
+    res.rows.assign(configs, std::vector<RunResult>(seed_count));
+
+    // Queue policy varies slowest, so fifo's four rows come first and the
+    // baseline of the table is the pre-backfill configuration.
+    for (std::size_t q = 0; q < queues.size(); ++q) {
+        for (std::size_t sc = 0; sc < sched.size(); ++sc) {
+            res.labels.push_back(std::string(queues[q]) + "/" + std::string(sched[sc]));
+        }
+    }
 
     for (std::uint32_t k = 0; k < seed_count; ++k) {
-        for (std::size_t i = 0; i < names.size(); ++i) {
+        for (std::size_t i = 0; i < configs; ++i) {
+            const std::string_view queue_name = queues[i / sched.size()];
+            const std::string_view sched_name = sched[i % sched.size()];
             // Regenerated per run rather than hoisted out of the inner loop:
             // Simulator takes ownership of both, and a policy that mutated a
             // shared cluster would leak into the next scheduler's row and
             // quietly become the thing the table measures.
             Cluster cluster{opts.nodes, kDefaultResources};
-            WorkloadGenerator gen(opts.seed + k, opts.arrival_rate);
+            WorkloadGenerator gen(opts.seed + k, opts.arrival_rate, opts.estimate_padding);
             std::vector<Job> jobs = gen.generate(opts.jobs);
 
-            Simulator sim(std::move(cluster), std::move(jobs), nullptr, make_scheduler(names[i]));
+            Simulator sim(std::move(cluster), std::move(jobs), nullptr, make_scheduler(sched_name),
+                          make_queue_policy(queue_name));
             sim.run();
 
             const TimeSample turnaround = turnaround_times(sim.jobs());
@@ -55,6 +69,7 @@ Comparison compare_schedulers(const Options& opts, std::uint32_t seed_count) {
             cell.p95_queue_wait = p95_or_zero(queue_wait_times(sim.jobs()).times);
             cell.utilization = sim.mean_utilization();
             cell.censored = turnaround.skipped;
+            cell.backfilled = sim.backfilled_count();
 
             // Offered load reads the jobs and the cluster's capacity, neither
             // of which placement touches, so it is identical down column k and
@@ -126,7 +141,6 @@ static PairedDelta paired_delta(const Comparison& cmp, std::size_t row, std::siz
 // The table. Ticks become seconds here and nowhere upstream, which is what
 // keeps the per-seed comparisons that produced `wins` exact.
 void report_comparison(const Comparison& cmp, const Options& opts) {
-    const std::span<const std::string_view> names = scheduler_names();
     const std::vector<std::size_t> wins = win_counts(cmp);
 
     // Everything is measured against the first name in the factory's table
@@ -151,20 +165,19 @@ void report_comparison(const Comparison& cmp, const Options& opts) {
     // dominated by how much workloads differ from each other; `± se` is on the
     // paired difference, where that difference has cancelled. A policy is only
     // distinguishable from the baseline when its delta clears a couple of `se`.
-    std::printf("  %-14s  %6s  %6s  %10s %8s  %10s  %16s  %5s  %4s\n", "scheduler", "util", "util",
-                "p95 turn", "sd", "p95 queue", "paired delta", "wins", "cens");
-    std::printf("  %-14s  %6s  %6s  %10s %8s  %10s  %16s  %5s  %4s\n", "", "cores", "mem",
-                "mean (s)", "(s)", "mean (s)", "mean (s) +- se", "", "");
+    std::printf("  %-23s  %6s  %10s %8s  %10s  %16s  %5s  %7s\n", "queue/scheduler", "util",
+                "p95 turn", "sd", "p95 queue", "paired delta", "wins", "backfil");
+    std::printf("  %-23s  %6s  %10s %8s  %10s  %16s  %5s  %7s\n", "", "cores", "mean (s)", "(s)",
+                "mean (s)", "mean (s) +- se", "", "");
 
     for (std::size_t i = 0; i < cmp.rows.size(); ++i) {
-        std::vector<double> turn, queue, util_cores, util_mem;
-        std::size_t censored = 0;
+        std::vector<double> turn, queue, util_cores;
+        std::size_t backfilled = 0;
         for (const RunResult& r : cmp.rows[i]) {
             turn.push_back(seconds(r.p95_turnaround));
             queue.push_back(seconds(r.p95_queue_wait));
             util_cores.push_back(r.utilization.cores);
-            util_mem.push_back(r.utilization.memory);
-            censored += r.censored;
+            backfilled += r.backfilled;
         }
         const double turn_mean = mean_of(turn);
 
@@ -176,10 +189,9 @@ void report_comparison(const Comparison& cmp, const Options& opts) {
             std::snprintf(delta, sizeof(delta), "%+9.1f +-%5.1f", d.mean, d.se);
         }
 
-        std::printf("  %-14.*s  %6.4f  %6.4f  %10.1f %8.1f  %10.1f  %16s  %2zu/%-2u  %4zu\n",
-                    static_cast<int>(names[i].size()), names[i].data(), mean_of(util_cores),
-                    mean_of(util_mem), turn_mean, stddev(turn, turn_mean), mean_of(queue), delta,
-                    wins[i], cmp.seeds, censored);
+        std::printf("  %-23s  %6.4f  %10.1f %8.1f  %10.1f  %16s  %2zu/%-2u  %7zu\n",
+                    cmp.labels[i].c_str(), mean_of(util_cores), turn_mean, stddev(turn, turn_mean),
+                    mean_of(queue), delta, wins[i], cmp.seeds, backfilled / cmp.seeds);
     }
 }
 

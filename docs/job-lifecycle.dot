@@ -1,5 +1,5 @@
-// The states one job passes through. Note that JobState::Queued covers two
-// distinct situations, which is why pending_.size() is not a count of Queued.
+// The states one job passes through. JobState::Queued covers two distinct
+// situations, which is why pending_.size() is not a count of Queued.
 //
 // Render:  dot -Tsvg docs/job-lifecycle.dot -o docs/job-lifecycle.svg
 
@@ -28,8 +28,8 @@ digraph lifecycle {
       fillcolor="#eef3fa", color="#4a6fa5"];
 
   q  -> pq [label="  JobArrival fires\l  now_ reaches submit_time\l"];
-  pq -> rn [label="  drain() places it\l  start_time = now_\l"];
-  rn -> dn [label="  JobFinish fires\l  at start_time + duration\l"];
+  pq -> rn [label="  drain() places it\l  phase 1 if it is the head,\l  phase 2 if it backfilled past one\l  start_time = now_\l"];
+  rn -> dn [label="  JobFinish fires\l  at start_time + duration\l  (the true one, not the estimate)\l"];
 
-  pq -> pq [label="  drain() ran but nothing fit  ", color="#7a5ba6"];
+  pq -> pq [label="  it did not fit, and no reservation\l  let it go early  ", color="#7a5ba6"];
 }

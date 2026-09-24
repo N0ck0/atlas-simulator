@@ -17,6 +17,14 @@ struct Job {
     JobId id{};
     Resources request{};
     Tick duration = 0;  // service time once it starts running
+
+    // The walltime the submitting user claimed, always >= duration. Backfill
+    // plans against this and never against `duration`: a scheduler that read
+    // the true service time would be reserving against a future it cannot
+    // know, and every number it produced would be unearned. Real schedulers
+    // enforce the same inequality by killing a job that overruns its claim.
+    Tick estimated_duration = 0;
+
     Tick submit_time = 0;
     Tick start_time = kNever;
     Tick finish_time = kNever;

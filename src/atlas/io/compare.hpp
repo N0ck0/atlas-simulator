@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "atlas/engine/clock.hpp"
@@ -19,12 +20,19 @@ struct RunResult {
     Tick p95_queue_wait = 0;
     LoadFactor utilization{};
     std::size_t censored = 0;
+    std::size_t backfilled = 0;  // zero under fifo by construction
 };
 
-// The whole sweep, rectangular on purpose: rows[i] is scheduler_names()[i] and
-// rows[i][k] is seed base_seed + k. A per-seed win count is a comparison down
-// column k, which only means anything if every scheduler saw that same seed.
+// The whole sweep, rectangular on purpose: rows[i][k] is configuration i on
+// seed base_seed + k. A per-seed win count is a comparison down column k,
+// which only means anything if every configuration saw that same seed.
+//
+// A configuration is a (queue policy, placement policy) pair. Which job runs
+// next and where it lands are independent choices, and measuring placement
+// alone separated the four policies by under half a percent, so the table takes
+// their product -- `labels[i]` names the pair.
 struct Comparison {
+    std::vector<std::string> labels;
     std::uint64_t base_seed = 0;
     std::uint32_t seeds = 0;
     // Indexed by seed, not by scheduler: placement cannot change offered load,
@@ -34,7 +42,7 @@ struct Comparison {
     std::vector<std::vector<RunResult>> rows;
 };
 
-// Runs every scheduler in scheduler_names() over seeds base_seed ..
+// Runs every (queue policy, scheduler) pair over seeds base_seed ..
 // base_seed + seed_count - 1, holding every other option fixed so that the
 // placement policy is the only thing that varies.
 //

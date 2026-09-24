@@ -1,10 +1,6 @@
 // RoundRobin: spread placements across nodes instead of always starting the
 // scan from index 0.
 //
-// TODO(nick): implement src/atlas/sched/round_robin.{hpp,cpp}, add "round_robin"
-// to the factory's table and kNames, add the .cpp to atlas_lib, and uncomment
-// this file in tests/CMakeLists.txt.
-//
 // Universal guarantees -- never returning a node that cannot fit, nullopt when
 // nothing fits, determinism -- are covered for every scheduler in
 // scheduler_contract_test.cpp. What is here is only what makes RoundRobin

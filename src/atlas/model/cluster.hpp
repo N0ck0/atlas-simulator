@@ -64,7 +64,7 @@ public:
     }
 
     // Summed free resources. Used below as a leak detector, and by the
-    // utilization metrics in S5.
+    // utilization metrics.
     Resources total_free() const {
         Resources free_sum;
         for (const Node& n : nodes_) {

@@ -1,5 +1,5 @@
-// Atlas stage 1 (through step 1.5): who owns what, and how work moves during
-// a run, including the metrics and the trace.
+// Who owns what, and how work moves during a run, including the two scheduling
+// interfaces, the metrics and the trace.
 // Companion: docs/job-lifecycle.dot
 //
 // Render:  dot -Tsvg docs/architecture.dot -o docs/architecture.svg
@@ -22,7 +22,7 @@ digraph atlas {
     fontsize=11; fontcolor="#6b6b6b"; labeljust="l";
     style="rounded,dashed"; color="#b0b0b0";
 
-    wgen   [label="WorkloadGenerator(seed, rate)\lRandomSource → profile, duration,\lPoisson arrival\l",
+    wgen   [label="WorkloadGenerator(seed, rate, padding)\lRandomSource → profile, duration,\lPoisson arrival; a second pass draws\lthe walltime estimate per job\l",
             fillcolor="#eef3fa", color="#4a6fa5"];
     sealed [label="std::vector<Job>\lthe whole workload, ids dense.\lFixed before the clock starts, so it\lcannot depend on a scheduling decision.\l",
             shape=box3d, fillcolor="#eef3fa", color="#4a6fa5"];
@@ -38,11 +38,10 @@ digraph atlas {
              color="#333333", penwidth=1.7];
     arrival [label="on_arrival(JobArrival)\lthe job becomes visible\l"];
     finish  [label="on_finish(JobFinish)\lwrites jobs_[id]: finish_time = now_,\lstate = Done\l"];
-    drain   [label="drain()\lTHE ONLY PLACEMENT SITE\lnothing else calls Cluster::allocate.\lWrites jobs_[id]: start_time = now_,\lnode, state = Running\l",
+    drain   [label="drain()\lTHE ONLY PLACEMENT SITE\lnothing else calls Cluster::allocate.\lphase 1  strict FIFO from the head\lphase 2  whatever may jump a blocked head\lWrites jobs_[id]: start_time = now_,\lnode, state = Running\l",
              fillcolor="#e8f3ec", color="#3f7d5a", penwidth=1.8];
 
-    // The members, with the four that existed before 1.5 held on one rank so
-    // the ownership reads at a glance.
+    // The core members held on one rank so the ownership reads at a glance.
     now     [label="now_ : Tick\lderived: only ever the timestamp\lof the event just popped\l",
              fillcolor="#fdf6e3", color="#a8853a"];
     queue   [label="queue_ : EventQueue\lordered by (time, seq)\lblocked on the CLOCK\l",
@@ -51,13 +50,15 @@ digraph atlas {
              fillcolor="#eef3fa", color="#4a6fa5"];
     pending [label="pending_ : deque<JobId>\larrived but unplaced\lblocked on a DECISION\l",
              fillcolor="#f1ecf7", color="#7a5ba6"];
+    running [label="running_ : vector<JobId>\lon a node right now. Projected into\lRunningJob so a policy can see finish\ltimes without seeing durations.\l",
+             fillcolor="#f1ecf7", color="#7a5ba6"];
 
     simend  [label="on_sim_end(SimEnd)\lthe run's upper limit: closes the\lintegral and sets sim_end_ = now_\l",
              fillcolor="#fdf6e3", color="#a8853a"];
     util    [label="util_ : UtilizationIntegral\lsim_end_ : Tick\ltime-weighted, advanced at every event\lBEFORE the handler changes state\l",
              fillcolor="#fdf6e3", color="#a8853a"];
 
-    {rank=same; now; queue; jobs; pending;}
+    {rank=same; now; queue; jobs; pending; running;}
   }
 
   subgraph cluster_hw {
@@ -65,15 +66,27 @@ digraph atlas {
     fontsize=11; fontcolor="#3f7d5a"; labeljust="l";
     style="rounded,filled"; fillcolor="#f5faf7"; color="#3f7d5a";
 
-    api   [label="first_fit(Resources) → NodeId?\lallocate(NodeId, Resources)\lrelease(NodeId, Resources)\l",
+    api   [label="allocate(NodeId, Resources)\lrelease(NodeId, Resources)\lnodes_span() → span<const Node>\l",
            style="filled", fillcolor="#ffffff", color="#3f7d5a"];
     nodes [label="nodes_ : vector<Node>\lcapacity fixed, free mutable\l",
            fillcolor="#e8f3ec", color="#3f7d5a"];
     api -> nodes [label="  mutates free", color="#3f7d5a"];
   }
 
+  subgraph cluster_sched {
+    label="sched — two independent halves of one decision";
+    fontsize=11; fontcolor="#7a5ba6"; labeljust="l";
+    style="rounded,filled"; fillcolor="#faf7fd"; color="#7a5ba6";
+
+    qpol  [label="QueuePolicy — WHICH JOB\lbackfill(backlog, nodes, running, now)\l  → JobId?\lfifo: never. backfill: EASY, admits a job\lpredicted to finish before the head's\lreservation.\lSees estimates, never durations.\l",
+           fillcolor="#f1ecf7", color="#7a5ba6"];
+    sched [label="Scheduler — WHICH NODE\lplace(Job, span<const Node>) → NodeId?\lfirst_fit / round_robin / least_loaded /\lresource_aware\lspan is const: a policy cannot mutate\lor copy the cluster.\l",
+           fillcolor="#f1ecf7", color="#7a5ba6"];
+    qpol -> sched [style=invis];
+  }
+
   // Construction: the sealed workload is moved in and becomes jobs_.
-  sealed -> jobs [label="  moved in at construction  ", color="#4a6fa5", weight=3];
+  sealed -> jobs [label="  moved in at construction  ", color="#4a6fa5", weight=6];
 
   // The spine. pop() is the only thing that advances time.
   run -> queue [label="  seed: one JobArrival per job.\l  When the queue drains, one SimEnd\l  at now_ closes the run.\l",
@@ -96,8 +109,12 @@ digraph atlas {
   finish  -> drain [label="  then drain once  ", penwidth=1.7, color="#3f7d5a"];
 
   drain -> pending [label="  take placed ids  ", color="#7a5ba6", dir=both];
+  drain -> running [label="  record / drop  ", color="#7a5ba6", dir=both];
   drain -> queue   [label="  schedule JobFinish\l  at now_ + duration\l", color="#a64a4a"];
-  drain -> api     [label="  first_fit → allocate  ", color="#3f7d5a", lhead=cluster_hw];
+  drain -> qpol    [label="  phase 2: which job?  ", color="#7a5ba6", lhead=cluster_sched];
+  drain -> sched   [label="  then: which node?  ", color="#7a5ba6"];
+  sched -> api     [label="  the chosen node  ", color="#3f7d5a", style=dashed, lhead=cluster_hw];
+  drain -> api     [label="  allocate  ", color="#3f7d5a", lhead=cluster_hw];
 
   subgraph cluster_trace {
     label="TraceWriter — optional JSONL log, observes and owns nothing";

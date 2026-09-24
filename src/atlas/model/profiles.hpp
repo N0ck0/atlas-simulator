@@ -13,7 +13,7 @@ struct JobProfile {
     Tick mean_duration;
 };
 
-// Picked uniformly. Weighting these is how a heavy tail gets added in S7.
+// Picked uniformly; weighting them is how a heavy tail would be added.
 //
 // The first three are core-dominant in the same proportion -- each asks for
 // twice the share of a node's cores as of its memory. A table of only those is
@@ -29,5 +29,10 @@ constexpr JobProfile kJobProfiles[] = {
     {"cache", {4u, 49'152u}, 600 * kSecond},
 };
 constexpr Resources kDefaultResources{16u, 65'536u};
+
+// Walltime estimates land uniformly in [1x, 3x] the true duration by default.
+// The spread, not the mean, is what makes backfill hard: a uniform bias would
+// be invertible, so a scheduler could divide it out and recover the future.
+constexpr double kDefaultEstimatePadding = 2.0;
 
 }  // namespace atlas

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "atlas/model/profiles.hpp"
+
 namespace atlas {
 
 // Run parameters, all overridable from the command line so that rho can be
@@ -16,6 +18,16 @@ struct Options {
     // Validated against scheduler_names() during parsing, so by the time an
     // Options reaches the simulator this is guaranteed constructible.
     const char* scheduler = "first_fit";
+
+    // Which job runs next, as opposed to which node it lands on. Defaults to
+    // fifo so that a bare `atlas` is the pre-backfill baseline.
+    const char* queue = "fifo";
+
+    // Widest over-claim in a walltime estimate: estimates are uniform on
+    // [1, 1 + padding] times the true duration. Only backfill reads them, but
+    // they are drawn for every run so the workload does not depend on the
+    // policy.
+    double estimate_padding = kDefaultEstimatePadding;
 
     // --compare runs every scheduler over `seeds` consecutive seeds starting
     // at `seed` and prints a table instead of one run's report. `scheduler` is

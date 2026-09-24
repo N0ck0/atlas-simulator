@@ -56,7 +56,7 @@ TEST_F(ClusterTest, AFullClusterHasNoFreeResources) {
     EXPECT_EQ(cluster_.total_free(), Resources{});
 }
 
-// Choosing a node moved to the Scheduler interface in S3; see
+// Choosing a node belongs to the Scheduler interface; see
 // tests/sched/first_fit_test.cpp. What stays here is the accounting.
 TEST_F(ClusterTest, ExposesItsNodesAsAReadOnlySpan) {
     const std::span<const Node> nodes = cluster_.nodes_span();

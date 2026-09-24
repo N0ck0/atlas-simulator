@@ -1,20 +1,12 @@
 // ResourceAware: multi-dimensional fit.
 //
-// TODO(nick): implement src/atlas/sched/resource_aware.{hpp,cpp}, add
-// "resource_aware" to the factory's table and kNames, add the .cpp to
-// atlas_lib, and uncomment this file in tests/CMakeLists.txt.
-//
-// This is the policy whose definition is most open, and defining it is the
-// interesting part of 3.3. LeastLoaded asks "who has the most room"; a
-// resource-aware policy asks a question about SHAPE -- whether the job's
-// core-to-memory ratio suits what a node has left. Best-fit (smallest adequate
-// remainder, minimizing wasted space) and dominant-resource fit (rank on the
-// dimension the job stresses most) are two well-known answers, and they differ.
-//
-// So most of this file is deliberately about guarantees rather than ranking.
-// The cases you add at the bottom are where the policy gets written down, and
-// they are what you will be asked to justify -- the comparison table in 3.4 is
-// only meaningful if this differs from LeastLoaded for a reason you can state.
+// LeastLoaded asks which node has the most room; a resource-aware policy asks
+// about shape -- whether the job's core-to-memory ratio suits what a node has
+// left. Best-fit (smallest adequate remainder) and dominant-resource fit (rank
+// on the dimension the job stresses most) are two well-known answers and they
+// disagree. This one packs onto the tightest fit, which makes it the deliberate
+// opposite of LeastLoaded; the comparison between them is only meaningful
+// because they differ for a statable reason.
 
 #include "atlas/sched/resource_aware.hpp"
 

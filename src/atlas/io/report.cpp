@@ -31,12 +31,13 @@ void report(const Simulator& sim, const Options& opts) {
     const LoadFactor rho = offered_load(sim.jobs(), sim.cluster());
     const LoadFactor util = sim.mean_utilization();
 
-    std::printf("run: seed %llu  nodes %u  jobs %u  rate %g/s  scheduler %s\n",
+    std::printf("run: seed %llu  nodes %u  jobs %u  rate %g/s  scheduler %s  queue %s\n",
                 static_cast<unsigned long long>(opts.seed), opts.nodes, opts.jobs,
-                opts.arrival_rate, opts.scheduler);
+                opts.arrival_rate, opts.scheduler, opts.queue);
     std::printf("  span          %12.1fs\n", seconds(sim.now()));
     std::printf("  offered rho   cores %.4f  memory %.4f\n", rho.cores, rho.memory);
     std::printf("  utilization   cores %.4f  memory %.4f\n", util.cores, util.memory);
+    std::printf("  backfilled    %12zu of %u jobs\n", sim.backfilled_count(), opts.jobs);
     report_sample("turnaround", turnaround_times(sim.jobs()));
     report_sample("queue wait", queue_wait_times(sim.jobs()));
 }

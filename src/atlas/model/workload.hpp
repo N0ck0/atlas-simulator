@@ -17,9 +17,15 @@ namespace atlas {
 // function of the seed alone and not of any scheduling decision.
 class WorkloadGenerator {
 public:
-    WorkloadGenerator(std::uint64_t seed, double arrival_rate_per_second)
-        : rng_(seed), arrival_rate_(arrival_rate_per_second) {
+    // `estimate_padding` is the widest over-claim a user makes: walltime
+    // estimates are drawn uniformly from [1, 1 + padding] times the true
+    // duration. Zero means perfect estimates, which is a useful control and a
+    // dishonest default -- real estimates are padded and erratically so.
+    WorkloadGenerator(std::uint64_t seed, double arrival_rate_per_second,
+                      double estimate_padding = kDefaultEstimatePadding)
+        : rng_(seed), arrival_rate_(arrival_rate_per_second), estimate_padding_(estimate_padding) {
         assert(arrival_rate_per_second > 0.0);
+        assert(estimate_padding >= 0.0);
     }
 
     // `count` jobs with dense ids 0..count-1 and non-decreasing submit_time.
@@ -39,12 +45,23 @@ public:
             jobs.push_back(j);
         }
 
+        // Estimates are drawn in a second pass rather than inside the loop
+        // above. Both orders are deterministic, but interleaving would shift
+        // every subsequent draw and silently change the arrival times and
+        // durations of an existing seed -- which would make every measurement
+        // taken before this feature incomparable with every one after it.
+        for (Job& j : jobs) {
+            const double padding = 1.0 + estimate_padding_ * rng_.next_uniform();
+            j.estimated_duration = static_cast<Tick>(static_cast<double>(j.duration) * padding);
+        }
+
         return jobs;
     }
 
 private:
     RandomSource rng_;
     double arrival_rate_;
+    double estimate_padding_;
 };
 
 }  // namespace atlas

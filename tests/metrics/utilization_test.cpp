@@ -1,6 +1,6 @@
-// The utilization integral and the queueing response. These are the metrics
-// every result from S3 on is reported in, so a metric that moves the wrong way
-// here would invalidate the comparisons rather than merely report them badly.
+// The utilization integral and the queueing response. Every scheduler
+// comparison is reported in these, so a metric that moves the wrong way here
+// would invalidate the results rather than merely report them badly.
 
 #include "atlas/metrics/utilization.hpp"
 

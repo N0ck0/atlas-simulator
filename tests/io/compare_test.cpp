@@ -12,6 +12,7 @@
 #include "atlas/model/profiles.hpp"
 #include "atlas/model/workload.hpp"
 #include "atlas/sched/factory.hpp"
+#include "atlas/sched/queue_factory.hpp"
 
 namespace atlas {
 namespace {
@@ -26,9 +27,11 @@ Options test_options() {
     return opt;
 }
 
-TEST(Compare, CoversEverySchedulerAndSeed) {
+TEST(Compare, CoversEveryConfigurationAndSeed) {
     const Comparison cmp = compare_schedulers(test_options(), 3);
-    ASSERT_EQ(cmp.rows.size(), scheduler_names().size());
+    const std::size_t configs = scheduler_names().size() * queue_policy_names().size();
+    ASSERT_EQ(cmp.rows.size(), configs);
+    ASSERT_EQ(cmp.labels.size(), configs);
     for (const auto& row : cmp.rows) EXPECT_EQ(row.size(), 3u);
     EXPECT_EQ(cmp.seeds, 3u);
     EXPECT_EQ(cmp.base_seed, test_options().seed);
@@ -59,7 +62,7 @@ TEST(Compare, CellMatchesAStandaloneRun) {
     const std::uint32_t seed_offset = 2;
 
     Cluster cluster{opt.nodes, kDefaultResources};
-    WorkloadGenerator gen(opt.seed + seed_offset, opt.arrival_rate);
+    WorkloadGenerator gen(opt.seed + seed_offset, opt.arrival_rate, opt.estimate_padding);
     Simulator sim(std::move(cluster), gen.generate(opt.jobs), nullptr,
                   make_scheduler(scheduler_names()[0]));
     sim.run();
@@ -68,9 +71,13 @@ TEST(Compare, CellMatchesAStandaloneRun) {
     const Tick expected_p95 = percentiles(times).p95;
 
     const Comparison cmp = compare_schedulers(opt, 3);
-    ASSERT_EQ(cmp.rows.size(), scheduler_names().size());
+    ASSERT_FALSE(cmp.rows.empty());
     ASSERT_EQ(cmp.rows[0].size(), 3u);
+    // Row 0 is fifo/<first scheduler>, which is what the standalone run above
+    // constructs by taking both defaults.
+    EXPECT_EQ(cmp.labels[0], std::string("fifo/") + std::string(scheduler_names()[0]));
     EXPECT_EQ(cmp.rows[0][seed_offset].p95_turnaround, expected_p95);
+    EXPECT_EQ(cmp.rows[0][seed_offset].backfilled, 0u);
 }
 
 // Offered load is a property of the workload, not the policy, so it belongs

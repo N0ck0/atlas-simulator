@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "atlas/sched/factory.hpp"
+#include "atlas/sched/queue_factory.hpp"
 
 namespace atlas {
 
@@ -18,16 +19,22 @@ static void print_usage(const char* program) {
                  "  --jobs N        jobs to generate (default 2000)\n"
                  "  --rate F        arrivals per second (default 0.025)\n"
                  "  --scheduler S   placement policy (default first_fit)\n"
+                 "  --queue Q       queue policy (default fifo)\n"
+                 "  --padding F     walltime over-claim, uniform [1,1+F]x (default 2)\n"
                  "  --trace PATH    write a JSONL event trace to PATH\n"
-                 "  --compare       run every scheduler and print a table\n"
-                 "  --seeds N       seeds per scheduler under --compare (default 30)\n"
+                 "  --compare       table over every queue/scheduler pair\n"
+                 "  --seeds N       seeds per configuration under --compare (default 30)\n"
                  "  --help          this message\n",
                  program);
 
     // Generated from the factory's table rather than spelled out above, so a
-    // scheduler added in 3.3 appears here without anyone remembering to.
+    // new scheduler appears here without anyone remembering to add it.
     std::fprintf(stderr, "\n  schedulers:");
     for (std::string_view name : scheduler_names()) {
+        std::fprintf(stderr, " %.*s", static_cast<int>(name.size()), name.data());
+    }
+    std::fprintf(stderr, "\n  queues:    ");
+    for (std::string_view name : queue_policy_names()) {
         std::fprintf(stderr, " %.*s", static_cast<int>(name.size()), name.data());
     }
     std::fprintf(stderr, "\n");
@@ -82,6 +89,10 @@ ParsedArgs parse_args(int argc, char** argv) {
             parsed = parse_value(value, opts.arrival_rate);
         } else if (std::strcmp(flag, "--scheduler") == 0) {
             opts.scheduler = value;
+        } else if (std::strcmp(flag, "--queue") == 0) {
+            opts.queue = value;
+        } else if (std::strcmp(flag, "--padding") == 0) {
+            parsed = parse_value(value, opts.estimate_padding);
         } else if (std::strcmp(flag, "--seeds") == 0) {
             parsed = parse_value(value, opts.seeds);
         } else if (std::strcmp(flag, "--trace") == 0) {
@@ -109,6 +120,11 @@ ParsedArgs parse_args(int argc, char** argv) {
         print_usage(program);
         return ParsedArgs{ParsedArgs::Status::Error, {}};
     }
+    if (make_queue_policy(opts.queue) == nullptr) {
+        std::fprintf(stderr, "%s: unknown queue policy %s\n", program, opts.queue);
+        print_usage(program);
+        return ParsedArgs{ParsedArgs::Status::Error, {}};
+    }
 
     const char* problem = nullptr;
     if (opts.nodes == 0)
@@ -117,6 +133,8 @@ ParsedArgs parse_args(int argc, char** argv) {
         problem = "--jobs must be at least 1";
     else if (!(opts.arrival_rate > 0.0))
         problem = "--rate must be positive";
+    else if (!(opts.estimate_padding >= 0.0))
+        problem = "--padding must be zero or positive";
     else if (opts.seeds == 0)
         problem = "--seeds must be at least 1";
     else if (opts.compare && opts.trace_path != nullptr)
