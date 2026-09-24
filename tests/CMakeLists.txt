@@ -11,7 +11,8 @@ add_executable(atlas_tests
   metrics/utilization_test.cpp
   model/cluster_test.cpp
   model/random_test.cpp
-  model/workload_test.cpp)
+  model/workload_test.cpp
+  sched/first_fit_test.cpp)
 
 # atlas_warnings applies to these sources but not to GoogleTest's own, which is
 # the reason the warning set is a target rather than global flags.

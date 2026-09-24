@@ -4,10 +4,16 @@
 #include <utility>
 #include <variant>
 
+#include "atlas/sched/first_fit.hpp"
+
 namespace atlas {
 
-Simulator::Simulator(Cluster cluster, std::vector<Job> jobs, TraceWriter* trace)
-    : cluster_(std::move(cluster)), jobs_(std::move(jobs)), trace_(trace) {}
+Simulator::Simulator(Cluster cluster, std::vector<Job> jobs, TraceWriter* trace,
+                     std::unique_ptr<Scheduler> scheduler)
+    : cluster_(std::move(cluster)),
+      jobs_(std::move(jobs)),
+      trace_(trace),
+      scheduler_(scheduler ? std::move(scheduler) : std::make_unique<FirstFitScheduler>()) {}
 
 LoadFactor Simulator::mean_utilization() const {
     assert(sim_end_ < kNever);
@@ -61,7 +67,7 @@ void Simulator::drain() {
     while (!pending_.empty()) {
         JobId next_job_id = pending_.front();
         Job& next_job = job(next_job_id);
-        auto res = cluster_.first_fit(next_job.request);
+        auto res = scheduler_->place(next_job, cluster_.nodes_span());
         if (!res.has_value()) break;
 
         //Job at front of pending queue can be assigned

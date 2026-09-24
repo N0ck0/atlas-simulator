@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 
 #include "atlas/engine/ids.hpp"
 #include "atlas/model/node.hpp"
@@ -39,24 +40,31 @@ TEST_F(ClusterTest, FitIsCheckedPerDimension) {
     EXPECT_FALSE(n0.can_fit(Resources{1u, 20'000u})) << "too much memory, cores to spare";
 }
 
-TEST_F(ClusterTest, FirstFitTakesTheLowestIndexAndMovesAlongAsNodesFill) {
-    for (std::uint32_t i = 0; i < kNodeCount; ++i) {
-        const std::optional<NodeId> placed = cluster_.first_fit(kPerNode);
-        ASSERT_TRUE(placed.has_value()) << "no free node at iteration " << i;
-        EXPECT_EQ(*placed, NodeId{i});
+TEST_F(ClusterTest, AllocateCountsARunningJobAndDeductsFromFree) {
+    cluster_.allocate(NodeId{0}, Resources{2u, 4'096u});
 
-        cluster_.allocate(*placed, kPerNode);
-        EXPECT_EQ(cluster_.node(*placed).running_jobs, 1u);
-    }
+    EXPECT_EQ(cluster_.node(NodeId{0}).running_jobs, 1u);
+    EXPECT_EQ(cluster_.node(NodeId{0}).free, (Resources{6u, 12'288u}));
+    EXPECT_EQ(cluster_.node(NodeId{1}).free, kPerNode) << "other nodes must be untouched";
 }
 
-TEST_F(ClusterTest, AFullClusterPlacesNothing) {
+TEST_F(ClusterTest, AFullClusterHasNoFreeResources) {
     for (std::uint32_t i = 0; i < kNodeCount; ++i) {
         cluster_.allocate(NodeId{i}, kPerNode);
     }
 
-    EXPECT_FALSE(cluster_.first_fit(Resources{1u, 1u}).has_value());
     EXPECT_EQ(cluster_.total_free(), Resources{});
+}
+
+// Choosing a node moved to the Scheduler interface in S3; see
+// tests/sched/first_fit_test.cpp. What stays here is the accounting.
+TEST_F(ClusterTest, ExposesItsNodesAsAReadOnlySpan) {
+    const std::span<const Node> nodes = cluster_.nodes_span();
+
+    ASSERT_EQ(nodes.size(), kNodeCount);
+    for (std::uint32_t i = 0; i < kNodeCount; ++i) {
+        EXPECT_EQ(nodes[i].id, NodeId{i}) << "span must be in node-index order";
+    }
 }
 
 // The leak check. Releasing everything must restore the starting state

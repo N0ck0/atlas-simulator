@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <memory>
 #include <vector>
 
 #include "atlas/engine/clock.hpp"
@@ -13,6 +14,7 @@
 #include "atlas/metrics/utilization.hpp"
 #include "atlas/model/cluster.hpp"
 #include "atlas/model/job.hpp"
+#include "atlas/sched/scheduler.hpp"
 
 namespace atlas {
 
@@ -25,7 +27,8 @@ class Simulator {
 public:
     // `jobs` must have dense ids matching its indices, as WorkloadGenerator
     // produces: jobs_[5] is JobId{5}.
-    Simulator(Cluster cluster, std::vector<Job> jobs, TraceWriter* trace = nullptr);
+    Simulator(Cluster cluster, std::vector<Job> jobs, TraceWriter* trace = nullptr,
+              std::unique_ptr<Scheduler> scheduler = nullptr);
 
     // Seeds the queue and runs it to exhaustion. Call once.
     void run();
@@ -56,6 +59,7 @@ private:
     UtilizationIntegral util_;
     Tick sim_end_ = kNever;
     TraceWriter* trace_ = nullptr;
+    std::unique_ptr<Scheduler> scheduler_;
 };
 
 }  // namespace atlas

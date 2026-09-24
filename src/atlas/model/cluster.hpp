@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "atlas/engine/ids.hpp"
@@ -21,18 +22,6 @@ public:
         for (std::uint32_t i = 0; i < node_count; ++i) {
             nodes_.push_back(Node{NodeId{i}, per_node, per_node, 0});
         }
-    }
-
-    // Lowest-index node that can fit `request`, or nullopt if none can.
-    // First-fit is the Stage 1 placeholder; S3 replaces it with a pluggable
-    // Scheduler interface.
-    std::optional<NodeId> first_fit(const Resources& request) const {
-        for (const Node& node : nodes_) {
-            if (node.can_fit(request)) {
-                return node.id;
-            }
-        }
-        return std::nullopt;
     }
 
     // Deducts `request` from the node's free pool and counts a running job.
@@ -95,6 +84,10 @@ public:
         utilized.memory_mb = total.memory_mb - free.memory_mb;
         return utilized;
     }
+
+    // Returns a read-only span to the private vector nodes_
+    // Span is safe to use since nodes_ doesn't grow after construction
+    std::span<const Node> nodes_span() const { return std::span{nodes_.begin(), nodes_.end()}; }
 
 private:
     Node& mutable_node(NodeId id) { return nodes_[static_cast<std::uint32_t>(id)]; }
