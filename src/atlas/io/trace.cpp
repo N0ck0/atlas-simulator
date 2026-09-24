@@ -41,8 +41,9 @@ TraceWriter::TraceWriter(const Options& opt) {
         std::perror(path);
         return;
     }
-    write_line(std::format(R"({{"ev":"header","seed":{},"nodes":{},"jobs":{},"arrival_rate":{}}})",
-                           opt.seed, opt.nodes, opt.jobs, opt.arrival_rate));
+    write_line(std::format(
+        R"({{"ev":"header","seed":{},"nodes":{},"jobs":{},"arrival_rate":{},"scheduler":"{}"}})",
+        opt.seed, opt.nodes, opt.jobs, opt.arrival_rate, opt.scheduler));
 }
 
 // Every record goes through here, so the one-object-per-line invariant is

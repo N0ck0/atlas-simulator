@@ -12,6 +12,10 @@ struct Options {
     std::uint32_t jobs = 2'000;
     double arrival_rate = 0.025;  // jobs per second
     const char* trace_path = nullptr;
+
+    // Validated against scheduler_names() during parsing, so by the time an
+    // Options reaches the simulator this is guaranteed constructible.
+    const char* scheduler = "first_fit";
 };
 
 // A command line has three outcomes, not two: run with these options, print

@@ -13,6 +13,9 @@ std::optional<NodeId> FirstFitScheduler::place(const Job& job, std::span<const N
     return std::nullopt;
 }
 
-std::string_view FirstFitScheduler::name() const { return name_; }
+// A literal rather than a stored member: the name is a compile-time constant,
+// and a string_view of a literal has static lifetime, so there is nothing to
+// allocate and nothing that can outlive what it points at.
+std::string_view FirstFitScheduler::name() const { return "first_fit"; }
 
 }  // namespace atlas

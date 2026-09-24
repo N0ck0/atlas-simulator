@@ -1,4 +1,4 @@
-{"ev":"header","seed":7,"nodes":4,"jobs":40,"arrival_rate":0.05}
+{"ev":"header","seed":7,"nodes":4,"jobs":40,"arrival_rate":0.05,"scheduler":"first_fit"}
 {"ev":"job","job":0,"submit":42840934,"dur":1560874,"cores":1,"mem_mb":2048}
 {"ev":"job","job":1,"submit":100815528,"dur":58712137,"cores":1,"mem_mb":2048}
 {"ev":"job","job":2,"submit":127976814,"dur":3137142,"cores":1,"mem_mb":2048}

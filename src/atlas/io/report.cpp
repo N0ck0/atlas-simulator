@@ -31,9 +31,9 @@ void report(const Simulator& sim, const Options& opts) {
     const LoadFactor rho = offered_load(sim.jobs(), sim.cluster());
     const LoadFactor util = sim.mean_utilization();
 
-    std::printf("run: seed %llu  nodes %u  jobs %u  rate %g/s\n",
+    std::printf("run: seed %llu  nodes %u  jobs %u  rate %g/s  scheduler %s\n",
                 static_cast<unsigned long long>(opts.seed), opts.nodes, opts.jobs,
-                opts.arrival_rate);
+                opts.arrival_rate, opts.scheduler);
     std::printf("  span          %12.1fs\n", seconds(sim.now()));
     std::printf("  offered rho   cores %.4f  memory %.4f\n", rho.cores, rho.memory);
     std::printf("  utilization   cores %.4f  memory %.4f\n", util.cores, util.memory);

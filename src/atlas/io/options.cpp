@@ -6,19 +6,29 @@
 #include <system_error>
 #include <type_traits>
 
+#include "atlas/sched/factory.hpp"
+
 namespace atlas {
 
 static void print_usage(const char* program) {
     std::fprintf(stderr,
-                 "usage: %s [options]\n"
-                 "  with no options, runs the built-in self-checks instead.\n\n"
-                 "  --seed N      random seed (default 7)\n"
-                 "  --nodes N     nodes in the cluster (default 8)\n"
-                 "  --jobs N      jobs to generate (default 2000)\n"
-                 "  --rate F      arrivals per second (default 0.025)\n"
-                 "  --trace PATH  write a JSONL event trace to PATH\n"
-                 "  --help        this message\n",
+                 "usage: %s [options]\n\n"
+                 "  --seed N        random seed (default 7)\n"
+                 "  --nodes N       nodes in the cluster (default 8)\n"
+                 "  --jobs N        jobs to generate (default 2000)\n"
+                 "  --rate F        arrivals per second (default 0.025)\n"
+                 "  --scheduler S   placement policy (default first_fit)\n"
+                 "  --trace PATH    write a JSONL event trace to PATH\n"
+                 "  --help          this message\n",
                  program);
+
+    // Generated from the factory's table rather than spelled out above, so a
+    // scheduler added in 3.3 appears here without anyone remembering to.
+    std::fprintf(stderr, "\n  schedulers:");
+    for (std::string_view name : scheduler_names()) {
+        std::fprintf(stderr, " %.*s", static_cast<int>(name.size()), name.data());
+    }
+    std::fprintf(stderr, "\n");
 }
 
 // Parses the whole of `text` into `out`. from_chars rather than atoi/strtoul:
@@ -62,6 +72,8 @@ ParsedArgs parse_args(int argc, char** argv) {
             parsed = parse_value(value, opts.jobs);
         } else if (std::strcmp(flag, "--rate") == 0) {
             parsed = parse_value(value, opts.arrival_rate);
+        } else if (std::strcmp(flag, "--scheduler") == 0) {
+            opts.scheduler = value;
         } else if (std::strcmp(flag, "--trace") == 0) {
             opts.trace_path = value;
         } else {
@@ -79,6 +91,15 @@ ParsedArgs parse_args(int argc, char** argv) {
     // Range is checked separately from syntax: "0" parses perfectly well and
     // then divides by zero in the utilization denominator, and a zero rate
     // trips an assert inside WorkloadGenerator rather than printing usage.
+    // An unknown scheduler is rejected here rather than at construction, so the
+    // user gets usage and the list of valid names instead of a null pointer
+    // surfacing somewhere inside the simulator.
+    if (make_scheduler(opts.scheduler) == nullptr) {
+        std::fprintf(stderr, "%s: unknown scheduler %s\n", program, opts.scheduler);
+        print_usage(program);
+        return ParsedArgs{ParsedArgs::Status::Error, {}};
+    }
+
     const char* problem = nullptr;
     if (opts.nodes == 0)
         problem = "--nodes must be at least 1";

@@ -9,6 +9,7 @@
 #include "atlas/model/job.hpp"
 #include "atlas/model/profiles.hpp"
 #include "atlas/model/workload.hpp"
+#include "atlas/sched/factory.hpp"
 
 using namespace atlas;
 
@@ -25,7 +26,10 @@ int main(int argc, char** argv) {
     WorkloadGenerator work_gen = WorkloadGenerator(opt.seed, opt.arrival_rate);
     std::vector<Job> jobs = work_gen.generate(opt.jobs);
     TraceWriter writer{opt};
-    Simulator sim = Simulator(std::move(main_cluster), std::move(jobs), &writer);
+
+    // parse_args has already rejected an unknown name, so this cannot be null.
+    Simulator sim =
+        Simulator(std::move(main_cluster), std::move(jobs), &writer, make_scheduler(opt.scheduler));
     sim.run();
 
     report(sim, opt);

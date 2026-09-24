@@ -93,7 +93,7 @@ make sim NODES=16 RATE=0.035
 A run reports what the cluster actually did, next to what was asked of it:
 
 ```
-run: seed 7  nodes 8  jobs 2000  rate 0.025/s
+run: seed 7  nodes 8  jobs 2000  rate 0.025/s  scheduler first_fit
   span               79950.8s
   offered rho   cores 0.6721  memory 0.3361
   utilization   cores 0.6621  memory 0.3310
@@ -113,7 +113,7 @@ all, while the unlucky one percent waits over twelve minutes.
 pandas and diffs cleanly:
 
 ```jsonl
-{"ev":"header","seed":7,"nodes":8,"jobs":2000,"arrival_rate":0.025}
+{"ev":"header","seed":7,"nodes":8,"jobs":2000,"arrival_rate":0.025,"scheduler":"first_fit"}
 {"ev":"job","job":0,"submit":85681869,"dur":1560874,"cores":1,"mem_mb":2048}
 {"t":85681869,"seq":0,"ev":"JobArrival","job":0}
 {"t":85681869,"ev":"JobStart","job":0,"node":0}

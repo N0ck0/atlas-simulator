@@ -39,7 +39,9 @@ add_library(atlas_lib STATIC
   src/atlas/io/report.cpp
   src/atlas/io/trace.cpp
   src/atlas/metrics/offered_load.cpp
+  src/atlas/sched/factory.cpp
   src/atlas/sched/first_fit.cpp
+  src/atlas/sched/round_robin.cpp
   src/atlas/metrics/percentiles.cpp
   src/atlas/metrics/time_sample.cpp
   src/atlas/metrics/utilization.cpp)

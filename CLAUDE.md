@@ -15,7 +15,9 @@ if the answer is none.
 
 ## Current state
 
-- **Stage:** S1 and S2 complete. S3 (pluggable schedulers) is next.
+- **Stage:** S1 and S2 complete. S3 in progress: 3.1 (Scheduler interface, FirstFit,
+  Simulator wiring) and 3.2 (factory and `--scheduler`) done. Next is 3.3, the three
+  baselines.
 - **What exists:** `libatlas`, a static library of 25 headers and 8 sources under
   `src/atlas/`, plus a thin CLI. Everything is in a flat `namespace atlas`, and
   includes are written from `src/` down (`#include "atlas/engine/clock.hpp"`).
@@ -25,6 +27,7 @@ if the answer is none.
   - `metrics/` — `load_factor`, `time_sample`, `percentiles`, `utilization`,
     `offered_load`
   - `io/` — `options` (CLI parsing), `trace`, `report`
+  - `sched/` — `scheduler` (the abstract interface), `first_fit`, `factory`
   - `src/main.cpp` is the CLI, and the only source outside the library.
 - **A run reports.** `SimEnd` is scheduled at `now_` once the queue drains, and its
   handler closes the utilization integral — which is what gives the integral a
@@ -84,7 +87,7 @@ below; only what code cannot express is written out here.
 | Utilization is a time-weighted integral, never an average of samples | `metrics/utilization.hpp` |
 | Percentiles use the nearest-rank convention | `metrics/percentiles.hpp` |
 | The trace records observed facts, not derived ones | `io/trace.hpp` |
-| `std::variant` for events, virtual dispatch for schedulers | `engine/event.hpp` (scheduler half arrives in S3) |
+| `std::variant` for events, virtual dispatch for schedulers | `engine/event.hpp`, `sched/scheduler.hpp` |
 
 **Determinism is the headline property**, and the one invariant with no home in code.
 Same seed → byte-identical trace, across compilers and optimization levels. The
